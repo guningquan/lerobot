@@ -149,6 +149,21 @@ from lerobot.utils.utils import (
 from lerobot.utils.visualization_utils import init_rerun, log_rerun_data
 
 
+def _format_record_phase_line(phase_totals: dict[str, float], frames: int, fps: int) -> str:
+    """Human-readable per-phase averages (ms) for record_loop profiling."""
+    if frames <= 0:
+        return ""
+    keys = sorted(phase_totals.keys())
+    pieces = [f"{k}={(phase_totals[k] / frames) * 1000:.2f}ms" for k in keys]
+    total_ms = sum(phase_totals.values()) / frames * 1000.0
+    target = 1000.0 / max(fps, 1)
+    pieces.append(f"total_measured={total_ms:.2f}ms")
+    pieces.append(f"target_period={target:.2f}ms")
+    if total_ms > 1e-6:
+        pieces.append(f"implied_hz={1000.0 / total_ms:.1f}")
+    return " | ".join(pieces)
+
+
 @dataclass
 class DatasetRecordConfig:
     # Dataset identifier. By convention it should match '{hf_username}/{dataset_name}' (e.g. `lerobot/test`).
@@ -299,6 +314,8 @@ def record_loop(
     single_task: str | None = None,
     display_data: bool = False,
     display_compressed_images: bool = False,
+    record_phase_timings: bool = False,
+    record_phase_log_interval: int = 150,
 ):
     if dataset is not None and dataset.fps != fps:
         raise ValueError(f"The dataset fps should be equal to requested fps ({dataset.fps} != {fps}).")
@@ -337,98 +354,149 @@ def record_loop(
     no_action_count = 0
     timestamp = 0
     start_episode_t = time.perf_counter()
-    while timestamp < control_time_s:
-        start_loop_t = time.perf_counter()
+    phase_totals: dict[str, float] = {}
+    phase_frames = 0
 
-        if events["exit_early"]:
-            events["exit_early"] = False
-            break
+    try:
+        while timestamp < control_time_s:
+            if events["exit_early"]:
+                events["exit_early"] = False
+                break
 
-        # Get robot observation
-        obs = robot.get_observation()
+            start_loop_t = time.perf_counter()
+            t = start_loop_t
+            pt: dict[str, float] | None = {} if record_phase_timings else None
 
-        # Applies a pipeline to the raw robot observation, default is IdentityProcessor
-        obs_processed = robot_observation_processor(obs)
+            def snap(label: str) -> None:
+                nonlocal t
+                if pt is not None:
+                    now = time.perf_counter()
+                    pt[label] = now - t
+                    t = now
 
-        if policy is not None or dataset is not None:
-            observation_frame = build_dataset_frame(dataset.features, obs_processed, prefix=OBS_STR)
+            # Get robot observation
+            obs = robot.get_observation()
+            snap("robot.get_observation")
 
-        # Get action from either policy or teleop
-        if policy is not None and preprocessor is not None and postprocessor is not None:
-            action_values = predict_action(
-                observation=observation_frame,
-                policy=policy,
-                device=get_safe_torch_device(policy.config.device),
-                preprocessor=preprocessor,
-                postprocessor=postprocessor,
-                use_amp=policy.config.use_amp,
-                task=single_task,
-                robot_type=robot.robot_type,
-            )
+            # Applies a pipeline to the raw robot observation, default is IdentityProcessor
+            obs_processed = robot_observation_processor(obs)
+            snap("robot_observation_processor")
 
-            act_processed_policy: RobotAction = make_robot_action(action_values, dataset.features)
+            observation_frame = None
+            if policy is not None or dataset is not None:
+                observation_frame = build_dataset_frame(dataset.features, obs_processed, prefix=OBS_STR)
+                snap("build_observation_frame")
 
-        elif policy is None and isinstance(teleop, Teleoperator):
-            if robot.name == "unitree_g1":
-                teleop.send_feedback(obs)
-            act = teleop.get_action()
+            act_processed_policy: RobotAction | None = None
+            act_processed_teleop: RobotAction | None = None
 
-            # Applies a pipeline to the raw teleop action, default is IdentityProcessor
-            act_processed_teleop = teleop_action_processor((act, obs))
-
-        elif policy is None and isinstance(teleop, list):
-            arm_action = teleop_arm.get_action()
-            arm_action = {f"arm_{k}": v for k, v in arm_action.items()}
-            keyboard_action = teleop_keyboard.get_action()
-            base_action = robot._from_keyboard_to_base_action(keyboard_action)
-            act = {**arm_action, **base_action} if len(base_action) > 0 else arm_action
-            act_processed_teleop = teleop_action_processor((act, obs))
-        else:
-            no_action_count += 1
-            if no_action_count == 1 or no_action_count % 10 == 0:
-                logging.warning(
-                    "No policy or teleoperator provided, skipping action generation. "
-                    "This is likely to happen when resetting the environment without a teleop device. "
-                    "The robot won't be at its rest position at the start of the next episode."
+            # Get action from either policy or teleop
+            if policy is not None and preprocessor is not None and postprocessor is not None:
+                action_values_tensor = predict_action(
+                    observation=observation_frame,
+                    policy=policy,
+                    device=get_safe_torch_device(policy.config.device),
+                    preprocessor=preprocessor,
+                    postprocessor=postprocessor,
+                    use_amp=policy.config.use_amp,
+                    task=single_task,
+                    robot_type=robot.robot_type,
                 )
-            continue
 
-        # Applies a pipeline to the action, default is IdentityProcessor
-        if policy is not None and act_processed_policy is not None:
-            action_values = act_processed_policy
-            robot_action_to_send = robot_action_processor((act_processed_policy, obs))
-        else:
-            action_values = act_processed_teleop
-            robot_action_to_send = robot_action_processor((act_processed_teleop, obs))
+                act_processed_policy = make_robot_action(action_values_tensor, dataset.features)
+                snap("policy.predict_and_make_robot_action")
 
-        # Send action to robot
-        # Action can eventually be clipped using `max_relative_target`,
-        # so action actually sent is saved in the dataset. action = postprocessor.process(action)
-        # TODO(steven, pepijn, adil): we should use a pipeline step to clip the action, so the sent action is the action that we input to the robot.
-        _sent_action = robot.send_action(robot_action_to_send)
+            elif policy is None and isinstance(teleop, Teleoperator):
+                if robot.name == "unitree_g1":
+                    teleop.send_feedback(obs)
+                act = teleop.get_action()
+                snap("teleop.get_action")
 
-        # Write to dataset
-        if dataset is not None:
-            action_frame = build_dataset_frame(dataset.features, action_values, prefix=ACTION)
-            frame = {**observation_frame, **action_frame, "task": single_task}
-            dataset.add_frame(frame)
+                # Applies a pipeline to the raw teleop action, default is IdentityProcessor
+                act_processed_teleop = teleop_action_processor((act, obs))
+                snap("teleop_action_processor")
 
-        if display_data:
-            log_rerun_data(
-                observation=obs_processed, action=action_values, compress_images=display_compressed_images
+            elif policy is None and isinstance(teleop, list):
+                arm_action = teleop_arm.get_action()
+                arm_action = {f"arm_{k}": v for k, v in arm_action.items()}
+                keyboard_action = teleop_keyboard.get_action()
+                base_action = robot._from_keyboard_to_base_action(keyboard_action)
+                act = {**arm_action, **base_action} if len(base_action) > 0 else arm_action
+                snap("teleop_arm_keyboard.get_action")
+
+                act_processed_teleop = teleop_action_processor((act, obs))
+                snap("teleop_action_processor")
+            else:
+                no_action_count += 1
+                if no_action_count == 1 or no_action_count % 10 == 0:
+                    logging.warning(
+                        "No policy or teleoperator provided, skipping action generation. "
+                        "This is likely to happen when resetting the environment without a teleop device. "
+                        "The robot won't be at its rest position at the start of the next episode."
+                    )
+                continue
+
+            # Applies a pipeline to the action, default is IdentityProcessor
+            if policy is not None and act_processed_policy is not None:
+                action_values = act_processed_policy
+                robot_action_to_send = robot_action_processor((act_processed_policy, obs))
+            else:
+                action_values = act_processed_teleop
+                robot_action_to_send = robot_action_processor((act_processed_teleop, obs))
+            snap("robot_action_processor")
+
+            # Send action to robot
+            # Action can eventually be clipped using `max_relative_target`,
+            # so action actually sent is saved in the dataset. action = postprocessor.process(action)
+            # TODO(steven, pepijn, adil): we should use a pipeline step to clip the action, so the sent action is the action that we input to the robot.
+            _sent_action = robot.send_action(robot_action_to_send)
+            snap("robot.send_action")
+
+            # Write to dataset
+            if dataset is not None:
+                action_frame = build_dataset_frame(dataset.features, action_values, prefix=ACTION)
+                frame = {**observation_frame, **action_frame, "task": single_task}
+                dataset.add_frame(frame)
+            snap("dataset.add_frame")
+
+            if display_data:
+                log_rerun_data(
+                    observation=obs_processed, action=action_values, compress_images=display_compressed_images
+                )
+            snap("log_rerun")
+
+            dt_s = time.perf_counter() - start_loop_t
+
+            sleep_time_s: float = 1 / fps - dt_s
+            if sleep_time_s < 0:
+                logging.warning(
+                    f"Record loop is running slower ({1 / dt_s:.1f} Hz) than the target FPS ({fps} Hz). Dataset frames might be dropped and robot control might be unstable. Common causes are: 1) Camera FPS not keeping up 2) Policy inference taking too long 3) CPU starvation"
+                )
+
+            t_sleep = time.perf_counter()
+            precise_sleep(max(sleep_time_s, 0.0))
+            if pt is not None:
+                pt["sleep"] = time.perf_counter() - t_sleep
+
+            if pt is not None:
+                phase_frames += 1
+                for k, v in pt.items():
+                    phase_totals[k] = phase_totals.get(k, 0.0) + v
+                if record_phase_log_interval > 0 and phase_frames % record_phase_log_interval == 0:
+                    logging.info(
+                        "Record phase averages over %d frames: %s",
+                        phase_frames,
+                        _format_record_phase_line(phase_totals, phase_frames, fps),
+                    )
+
+            timestamp = time.perf_counter() - start_episode_t
+    finally:
+        if record_phase_timings and phase_frames > 0:
+            logging.info(
+                "Record loop phase timing summary (%d frames): %s",
+                phase_frames,
+                _format_record_phase_line(phase_totals, phase_frames, fps),
             )
-
-        dt_s = time.perf_counter() - start_loop_t
-
-        sleep_time_s: float = 1 / fps - dt_s
-        if sleep_time_s < 0:
-            logging.warning(
-                f"Record loop is running slower ({1 / dt_s:.1f} Hz) than the target FPS ({fps} Hz). Dataset frames might be dropped and robot control might be unstable. Common causes are: 1) Camera FPS not keeping up 2) Policy inference taking too long 3) CPU starvation"
-            )
-
-        precise_sleep(max(sleep_time_s, 0.0))
-
-        timestamp = time.perf_counter() - start_episode_t
 
 
 @parser.wrap()
