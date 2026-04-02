@@ -65,6 +65,8 @@ from pathlib import Path
 from pprint import pformat
 from typing import Any
 
+from tqdm import tqdm
+
 from lerobot.cameras import (  # noqa: F401
     CameraConfig,  # noqa: F401
 )
@@ -92,6 +94,7 @@ from lerobot.processor.rename_processor import rename_stats
 from lerobot.robots import (  # noqa: F401
     Robot,
     RobotConfig,
+    aloha_ros,
     bi_so100_follower,
     earthrover_mini_plus,
     hope_jr,
@@ -294,6 +297,20 @@ def record_loop(
         preprocessor.reset()
         postprocessor.reset()
 
+    # Initialize progress bar if dataset is provided
+    pbar = None
+    initial_frame_count = 0
+    if dataset is not None and control_time_s is not None:
+        total_frames = int(control_time_s * fps)
+        initial_frame_count = dataset.episode_buffer.get("size", 0)
+        pbar = tqdm(
+            total=total_frames,
+            desc=f"Recording ({control_time_s}s)",
+            unit="frame",
+            bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]",
+            leave=False,  # Don't leave progress bar after completion
+        )
+
     timestamp = 0
     start_episode_t = time.perf_counter()
     while timestamp < control_time_s:
@@ -367,6 +384,13 @@ def record_loop(
             action_frame = build_dataset_frame(dataset.features, action_values, prefix=ACTION)
             frame = {**observation_frame, **action_frame, "task": single_task}
             dataset.add_frame(frame)
+            
+            # Update progress bar based on actual recorded frames
+            if pbar is not None:
+                current_frame_count = dataset.episode_buffer.get("size", 0)
+                frames_recorded = current_frame_count - initial_frame_count
+                pbar.n = min(frames_recorded, pbar.total)
+                pbar.refresh()
 
         if display_data:
             log_rerun_data(observation=obs_processed, action=action_values)
@@ -375,6 +399,15 @@ def record_loop(
         precise_sleep(1 / fps - dt_s)
 
         timestamp = time.perf_counter() - start_episode_t
+    
+    # Close progress bar if it was created
+    if pbar is not None:
+        # Update to final count
+        if dataset is not None:
+            final_frame_count = dataset.episode_buffer.get("size", 0)
+            frames_recorded = final_frame_count - initial_frame_count
+            pbar.n = min(frames_recorded, pbar.total)
+        pbar.close()
 
 
 @parser.wrap()
