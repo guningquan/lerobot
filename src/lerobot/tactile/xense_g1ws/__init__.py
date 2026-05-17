@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+
 # Copyright 2024 The HuggingFace Inc. team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -12,5 +14,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .optimizers import OptimizerConfig as OptimizerConfig
-from .schedulers import LRSchedulerConfig as LRSchedulerConfig
+from .config_xense_g1ws import XENSEG1WSConfig
+from .config_zmq import XENSEG1WSZMQConfig
+from .xense_g1ws import XENSEG1WSSensor
+from .zmq_client import XENSEG1WSZMQClient
+
+__all__ = [
+    "XENSEG1WSConfig",
+    "XENSEG1WSSensor",
+    "XENSEG1WSZMQConfig",
+    "XENSEG1WSZMQClient",
+]

@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+
 # Copyright 2024 The HuggingFace Inc. team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -12,5 +14,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .optimizers import OptimizerConfig as OptimizerConfig
-from .schedulers import LRSchedulerConfig as LRSchedulerConfig
+from .config import TactileSensorConfig, TactileSensorMode
+from .tactile_sensor import TactileSensor
+from .utils import make_tactile_sensors_from_configs
+
+# NOTE: Tactile sensor submodule configs and implementations (XENSEG1WSConfig, etc.)
+# are intentionally NOT re-exported here to avoid pulling backend-specific dependencies.
+# Import from submodules: ``from lerobot.tactile.xense_g1ws import XENSEG1WSConfig``
+
+__all__ = [
+    "TactileSensor",
+    "TactileSensorConfig",
+    "TactileSensorMode",
+    "make_tactile_sensors_from_configs",
+]

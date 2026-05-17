@@ -19,6 +19,7 @@ from functools import cached_property
 from typing import Any
 
 from lerobot.cameras.utils import make_cameras_from_configs
+from lerobot.tactile.utils import make_tactile_sensors_from_configs
 from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
 
 from ..robot import Robot
@@ -70,6 +71,12 @@ class AlohaRos(Robot):
         else:
             self.cameras = {}
 
+        # Setup tactile sensors if provided (attached to follower grippers)
+        if config.tactile_sensors:
+            self.tactile_sensors = make_tactile_sensors_from_configs(config.tactile_sensors)
+        else:
+            self.tactile_sensors = {}
+
     @property
     def _motors_ft(self) -> dict[str, type]:
         """Motor features for both arms."""
@@ -91,10 +98,18 @@ class AlohaRos(Robot):
             for cam in self.cameras
         }
 
+    @property
+    def _tactile_ft(self) -> dict[str, tuple]:
+        """Tactile feature shapes: (channels, height, width) — channel-first."""
+        return {
+            f"tactile_{name}": (sensor.channels, sensor.height, sensor.width)
+            for name, sensor in self.tactile_sensors.items()
+        }
+
     @cached_property
     def observation_features(self) -> dict[str, type | tuple]:
         """Combined observation features."""
-        return {**self._motors_ft, **self._cameras_ft}
+        return {**self._motors_ft, **self._cameras_ft, **self._tactile_ft}
 
     @cached_property
     def action_features(self) -> dict[str, type]:
@@ -103,12 +118,13 @@ class AlohaRos(Robot):
 
     @property
     def is_connected(self) -> bool:
-        """Check if robots and cameras are connected."""
+        """Check if robots, cameras, and tactile sensors are connected."""
         cameras_connected = all(cam.is_connected for cam in self.cameras.values()) if self.cameras else True
-        return self.left_arm.is_connected and self.right_arm.is_connected and cameras_connected
+        tactile_connected = all(s.is_connected for s in self.tactile_sensors.values()) if self.tactile_sensors else True
+        return self.left_arm.is_connected and self.right_arm.is_connected and cameras_connected and tactile_connected
 
     def connect(self, calibrate: bool = True) -> None:
-        """Connect to robots and cameras."""
+        """Connect to robots, cameras, and tactile sensors."""
         if self.is_connected:
             raise DeviceAlreadyConnectedError(f"{self} already connected")
 
@@ -119,6 +135,13 @@ class AlohaRos(Robot):
         # Connect cameras
         for cam in self.cameras.values():
             cam.connect()
+
+        # Connect tactile sensors (staggered to avoid SDK camera resource conflicts)
+        for name, sensor in self.tactile_sensors.items():
+            import time as _time
+            logger.info(f"Connecting tactile sensor: {name} ...")
+            sensor.connect()
+            _time.sleep(1.0)  # Allow SDK camera resources to stabilise
 
         self.configure()
         logger.info(f"{self} connected.")
@@ -165,6 +188,10 @@ class AlohaRos(Robot):
         for cam_key, cam in self.cameras.items():
             obs_dict[cam_key] = cam.async_read()
 
+        # Capture tactile data — kept in (C,H,W) for policy consumption
+        for tac_key, sensor in self.tactile_sensors.items():
+            obs_dict[f"tactile_{tac_key}"] = sensor.async_read()
+
         return obs_dict
 
     def send_action(self, action: dict[str, float]) -> dict[str, float]:
@@ -202,7 +229,7 @@ class AlohaRos(Robot):
         return action
 
     def disconnect(self) -> None:
-        """Disconnect from robots and cameras."""
+        """Disconnect from robots, cameras, and tactile sensors."""
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
 
@@ -213,5 +240,9 @@ class AlohaRos(Robot):
         # Disconnect cameras
         for cam in self.cameras.values():
             cam.disconnect()
+
+        # Disconnect tactile sensors
+        for sensor in self.tactile_sensors.values():
+            sensor.disconnect()
 
         logger.info(f"{self} disconnected.")

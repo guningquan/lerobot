@@ -3,6 +3,8 @@ import os
 
 if os.getlogin() == 'guningquan':
     DATA_DIR = '/mnt/ssd1/guningquan/Programs_server/act_dataset_checkpoint/dataset'
+elif os.getlogin() == 'theodoreliu':
+    DATA_DIR = '/home/theodoreliu/Dataset_and_Checkpoint/dataset'
 elif os.getlogin() == 'ubuntu20' or os.getlogin() == 'ubuntu22':
     DATA_DIR = '/home/robot/Dataset_and_Checkpoint/dataset'
 else:
@@ -614,6 +616,63 @@ TASK_CONFIGS = {
                              'cam_right_wrist',
                              ]
         },
+    
+    'apple_grasping': {
+        'dataset_dir': DATA_DIR + '/apple_grasping',
+        'episode_len': 450,  # e.g., 15 seconds * 30FPS = 450
+        'camera_names': ['cam_high', 'cam_low', 'cam_left_wrist', 'cam_right_wrist']
+    },
+
+    'aloha_wear_shoe': {
+        'dataset_dir': DATA_DIR + '/aloha_wear_shoe',
+        'num_episodes': 50,
+        'episode_len': 600,
+        'camera_names': ['cam_high', 'cam_low', 'cam_left_wrist', 'cam_right_wrist']
+    },
+    'aloha_grasp_apple': {  # test task only
+        'dataset_dir': DATA_DIR + '/aloha_grasp_apple',
+        'num_episodes': 85,
+        'episode_len': 600,
+        'camera_names': ['cam_high', 'cam_low', 'cam_left_wrist', 'cam_right_wrist']
+    },
+
+    # ── 正式实验任务 ──
+    'aloha_flip_switch': {  # Level 1: visual-dominant
+        'dataset_dir': DATA_DIR + '/aloha_flip_switch',
+        'num_episodes': 50,
+        'episode_len': 300,
+        'camera_names': ['cam_high', 'cam_low', 'cam_left_wrist', 'cam_right_wrist']
+    },
+    'aloha_hidden_property_grasp': {  # Level 2: hidden-property force-critical
+        'dataset_dir': DATA_DIR + '/aloha_hidden_property_grasp',
+        'num_episodes': 50,
+        'episode_len': 450,
+        'camera_names': ['cam_high', 'cam_low', 'cam_left_wrist', 'cam_right_wrist']
+    },
+    'aloha_slip_hold_or_pull': {  # Level 2/3: controlled slip / grasp stability
+        'dataset_dir': DATA_DIR + '/aloha_slip_hold_or_pull',
+        'num_episodes': 50,
+        'episode_len': 750,
+        'camera_names': ['cam_high', 'cam_low', 'cam_left_wrist', 'cam_right_wrist']
+    },
+    'aloha_pressure_wipe': {  # Level 2/3: simplified continuous-contact force control
+        'dataset_dir': DATA_DIR + '/aloha_pressure_wipe',
+        'num_episodes': 50,
+        'episode_len': 450,
+        'camera_names': ['cam_high', 'cam_low', 'cam_left_wrist', 'cam_right_wrist']
+    },
+    'aloha_peg_insertion': {  # Level 3: fine-tactile slip detection
+        'dataset_dir': DATA_DIR + '/aloha_peg_insertion',
+        'num_episodes': 50,
+        'episode_len': 600,
+        'camera_names': ['cam_high', 'cam_low', 'cam_left_wrist', 'cam_right_wrist']
+    },
+    'aloha_towel_unfold': {  # Extension: high-variance deformable manipulation
+        'dataset_dir': DATA_DIR + '/aloha_towel_unfold',
+        'num_episodes': 50,
+        'episode_len': 600,
+        'camera_names': ['cam_high', 'cam_low', 'cam_left_wrist', 'cam_right_wrist']
+    },
 
 }
 
@@ -624,6 +683,7 @@ FPS = 30
 
 JOINT_NAMES = ["waist", "shoulder", "elbow", "forearm_roll", "wrist_angle", "wrist_rotate"]
 START_ARM_POSE = [0, -0.96, 1.16, 0, -0.3, 0, 0.02239, -0.02239,  0, -0.96, 1.16, 0, -0.3, 0, 0.02239, -0.02239]
+#START_ARM_POSE = [0, -0.8, 0.8, 0, 0, 0, 0.02239, -0.02239,  0, -0.8, 0.8, 0, 0, 0, 0.02239, -0.02239]
 
 # Sleep positions for robots (6 joints: waist, shoulder, elbow, forearm_roll, wrist_angle, wrist_rotate)
 PUPPET_SLEEP_POSITION = (0, -1.7, 1.55, 0.12, 0.65, 0)
@@ -636,10 +696,10 @@ PUPPET_GRIPPER_POSITION_OPEN = 0.05800
 PUPPET_GRIPPER_POSITION_CLOSE = 0.01844
 
 # Gripper joint limits (qpos[6])
-MASTER_GRIPPER_JOINT_OPEN = 0.3083
-MASTER_GRIPPER_JOINT_CLOSE = -0.6842
-PUPPET_GRIPPER_JOINT_OPEN = 1.4910
-PUPPET_GRIPPER_JOINT_CLOSE = -0.2  # @gnq -0.6213 -> 0
+MASTER_GRIPPER_JOINT_OPEN = 0.7409
+MASTER_GRIPPER_JOINT_CLOSE = -0.0614
+PUPPET_GRIPPER_JOINT_OPEN = 0.0414
+PUPPET_GRIPPER_JOINT_CLOSE = -0.9265  # @gnq -0.6213 -> 0
 
 ############################ Helper functions ############################
 

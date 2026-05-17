@@ -639,7 +639,11 @@ def hw_to_dataset_features(
         for key, ftype in hw_features.items()
         if ftype is float or (isinstance(ftype, PolicyFeature) and ftype.type != FeatureType.VISUAL)
     }
-    cam_fts = {key: shape for key, shape in hw_features.items() if isinstance(shape, tuple)}
+    # Separate camera tuples from tactile tuples
+    cam_fts = {key: shape for key, shape in hw_features.items()
+               if isinstance(shape, tuple) and not key.startswith("tactile_")}
+    tactile_fts = {key: shape for key, shape in hw_features.items()
+                   if isinstance(shape, tuple) and key.startswith("tactile_")}
 
     if joint_fts and prefix == ACTION:
         features[prefix] = {
@@ -660,6 +664,14 @@ def hw_to_dataset_features(
             "dtype": "video" if use_video else "image",
             "shape": shape,
             "names": ["height", "width", "channels"],
+        }
+
+    # Tactile features saved as float32 arrays (multi-channel, >3 channels unsupported by PNG)
+    for key, shape in tactile_fts.items():
+        features[f"{prefix}.tactiles.{key}"] = {
+            "dtype": "float32",
+            "shape": shape,
+            "names": ["channels", "height", "width"],
         }
 
     _validate_feature_names(features)
@@ -689,6 +701,8 @@ def build_dataset_frame(
             continue
         elif ft["dtype"] == "float32" and len(ft["shape"]) == 1:
             frame[key] = np.array([values[name] for name in ft["names"]], dtype=np.float32)
+        elif ft["dtype"] == "float32" and ".tactiles." in key:
+            frame[key] = values[key.removeprefix(f"{prefix}.tactiles.")]
         elif ft["dtype"] in ["image", "video"]:
             frame[key] = values[key.removeprefix(f"{prefix}.images.")]
 
@@ -723,6 +737,13 @@ def dataset_to_policy_features(features: dict[str, dict]) -> dict[str, PolicyFea
             names = ft["names"]
             # Backward compatibility for "channel" which is an error introduced in LeRobotDataset v2.0 for ported datasets.
             if names[2] in ["channel", "channels"]:  # (h, w, c) -> (c, h, w)
+                shape = (shape[2], shape[0], shape[1])
+        elif ".tactiles." in key:
+            type = FeatureType.TACTILE
+            if len(shape) != 3:
+                raise ValueError(f"Number of dimensions of tactile feature {key} != 3 (shape={shape})")
+            names = ft["names"]
+            if names[0] not in ["channel", "channels"]:  # (h, w, c) → (c, h, w)
                 shape = (shape[2], shape[0], shape[1])
         elif key == OBS_ENV_STATE:
             type = FeatureType.ENV

@@ -33,9 +33,10 @@ from torch import Tensor, nn
 from torchvision.models._utils import IntermediateLayerGetter
 from torchvision.ops.misc import FrozenBatchNorm2d
 
-from lerobot.policies.act.configuration_act import ACTConfig
-from lerobot.policies.pretrained import PreTrainedPolicy
-from lerobot.utils.constants import ACTION, OBS_ENV_STATE, OBS_IMAGES, OBS_STATE
+from lerobot.utils.constants import ACTION, OBS_ENV_STATE, OBS_IMAGES, OBS_STATE, OBS_TACTILES
+
+from ..pretrained import PreTrainedPolicy
+from .configuration_act import ACTConfig
 
 
 class ACTPolicy(PreTrainedPolicy):
@@ -69,14 +70,14 @@ class ACTPolicy(PreTrainedPolicy):
         self.reset()
 
     def get_optim_params(self) -> dict:
-        # TODO(aliberts, rcadene): As of now, lr_backbone == lr
-        # Should we remove this and just `return self.parameters()`?
         return [
             {
                 "params": [
                     p
                     for n, p in self.named_parameters()
-                    if not n.startswith("model.backbone") and p.requires_grad
+                    if not n.startswith("model.backbone")
+                    and not n.startswith("model.tactile_backbone")
+                    and p.requires_grad
                 ]
             },
             {
@@ -84,6 +85,14 @@ class ACTPolicy(PreTrainedPolicy):
                     p
                     for n, p in self.named_parameters()
                     if n.startswith("model.backbone") and p.requires_grad
+                ],
+                "lr": self.config.optimizer_lr_backbone,
+            },
+            {
+                "params": [
+                    p
+                    for n, p in self.named_parameters()
+                    if n.startswith("model.tactile_backbone") and p.requires_grad
                 ],
                 "lr": self.config.optimizer_lr_backbone,
             },
@@ -129,6 +138,9 @@ class ACTPolicy(PreTrainedPolicy):
         if self.config.image_features:
             batch = dict(batch)  # shallow copy so that adding a key doesn't modify the original
             batch[OBS_IMAGES] = [batch[key] for key in self.config.image_features]
+        if self.config.tactile_features:
+            batch = dict(batch)
+            batch[OBS_TACTILES] = [batch[key] for key in self.config.tactile_features]
 
         actions = self.model(batch)[0]
         return actions
@@ -138,12 +150,16 @@ class ACTPolicy(PreTrainedPolicy):
         if self.config.image_features:
             batch = dict(batch)  # shallow copy so that adding a key doesn't modify the original
             batch[OBS_IMAGES] = [batch[key] for key in self.config.image_features]
+        if self.config.tactile_features:
+            batch = dict(batch)
+            batch[OBS_TACTILES] = [batch[key] for key in self.config.tactile_features]
 
         actions_hat, (mu_hat, log_sigma_x2_hat) = self.model(batch)
 
-        l1_loss = (
-            F.l1_loss(batch[ACTION], actions_hat, reduction="none") * ~batch["action_is_pad"].unsqueeze(-1)
-        ).mean()
+        abs_err = F.l1_loss(batch[ACTION], actions_hat, reduction="none")
+        valid_mask = ~batch["action_is_pad"].unsqueeze(-1)
+        num_valid = valid_mask.sum() * abs_err.shape[-1]
+        l1_loss = (abs_err * valid_mask).sum() / num_valid.clamp_min(1)
 
         loss_dict = {"l1_loss": l1_loss.item()}
         if self.config.use_vae:
@@ -330,13 +346,47 @@ class ACT(nn.Module):
             # feature map).
             # Note: The forward method of this returns a dict: {"feature_map": output}.
             self.backbone = IntermediateLayerGetter(backbone_model, return_layers={"layer4": "feature_map"})
+            self.backbone_out_channels = backbone_model.fc.in_features
+
+        # Separate backbone for tactile feature extraction.
+        # Tactile inputs can have different channel counts (1 for simple, N for full mode)
+        # across sensors.  We use per-sensor 1×1 conv projections to map each sensor to
+        # a common 3-channel input for the shared ResNet backbone.
+        self._has_tactile = bool(self.config.tactile_features)
+        # Tactile channel subset for ablation (None = use all)
+        self._tactile_indices: list[int] | None = (
+            list(self.config.tactile_channel_indices)
+            if self.config.tactile_channel_indices is not None
+            else None
+        )
+        if self._has_tactile:
+            self._tactile_input_channels: list[int] = []
+            for ft in self.config.tactile_features.values():
+                ch = len(self._tactile_indices) if self._tactile_indices is not None else ft.shape[0]
+                self._tactile_input_channels.append(ch)
+
+            # Per-sensor input projection: effective_ch → 3
+            self.tactile_input_proj = nn.ModuleList([
+                nn.Conv2d(ch, 3, kernel_size=1, bias=False) if ch != 3 else nn.Identity()
+                for ch in self._tactile_input_channels
+            ])
+
+            tactile_backbone_model = getattr(torchvision.models, config.vision_backbone)(
+                replace_stride_with_dilation=[False, False, config.replace_final_stride_with_dilation],
+                weights=None,  # No pretrained weights — tactile domain is different from ImageNet
+                norm_layer=FrozenBatchNorm2d,
+            )
+            self.tactile_backbone = IntermediateLayerGetter(
+                tactile_backbone_model, return_layers={"layer4": "feature_map"}
+            )
+            self.tactile_backbone_out_channels = tactile_backbone_model.fc.in_features
 
         # Transformer (acts as VAE decoder when training with the variational objective).
         self.encoder = ACTEncoder(config)
         self.decoder = ACTDecoder(config)
 
         # Transformer encoder input projections. The tokens will be structured like
-        # [latent, (robot_state), (env_state), (image_feature_map_pixels)].
+        # [latent, (robot_state), (env_state), (image_feature_map_pixels), (tactile_feature_map_pixels)].
         if self.config.robot_state_feature:
             self.encoder_robot_state_input_proj = nn.Linear(
                 self.config.robot_state_feature.shape[0], config.dim_model
@@ -348,7 +398,11 @@ class ACT(nn.Module):
         self.encoder_latent_input_proj = nn.Linear(config.latent_dim, config.dim_model)
         if self.config.image_features:
             self.encoder_img_feat_input_proj = nn.Conv2d(
-                backbone_model.fc.in_features, config.dim_model, kernel_size=1
+                self.backbone_out_channels, config.dim_model, kernel_size=1
+            )
+        if self._has_tactile:
+            self.encoder_tactile_feat_input_proj = nn.Conv2d(
+                self.tactile_backbone_out_channels, config.dim_model, kernel_size=1
             )
         # Transformer encoder positional embeddings.
         n_1d_tokens = 1  # for the latent
@@ -359,6 +413,8 @@ class ACT(nn.Module):
         self.encoder_1d_feature_pos_embed = nn.Embedding(n_1d_tokens, config.dim_model)
         if self.config.image_features:
             self.encoder_cam_feat_pos_embed = ACTSinusoidalPositionEmbedding2d(config.dim_model // 2)
+        if self._has_tactile:
+            self.encoder_tactile_feat_pos_embed = ACTSinusoidalPositionEmbedding2d(config.dim_model // 2)
 
         # Transformer decoder.
         # Learnable positional embedding for the transformer's decoder (in the style of DETR object queries).
@@ -374,6 +430,16 @@ class ACT(nn.Module):
         for p in chain(self.encoder.parameters(), self.decoder.parameters()):
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
+        # Tactile backbone: Xavier init since it has no pretrained weights.
+        if self._has_tactile:
+            for p in self.tactile_backbone.parameters():
+                if p.dim() > 1:
+                    nn.init.xavier_uniform_(p)
+            for proj in self.tactile_input_proj:
+                if isinstance(proj, nn.Conv2d):
+                    for p in proj.parameters():
+                        if p.dim() > 1:
+                            nn.init.xavier_uniform_(p)
 
     def forward(self, batch: dict[str, Tensor]) -> tuple[Tensor, tuple[Tensor, Tensor] | tuple[None, None]]:
         """A forward pass through the Action Chunking Transformer (with optional VAE encoder).
@@ -479,9 +545,25 @@ class ACT(nn.Module):
                 cam_pos_embed = einops.rearrange(cam_pos_embed, "b c h w -> (h w) b c")
 
                 # Extend immediately instead of accumulating and concatenating
-                # Convert to list to extend properly
                 encoder_in_tokens.extend(list(cam_features))
                 encoder_in_pos_embed.extend(list(cam_pos_embed))
+
+        # Tactile feature extraction — separate backbone with per-sensor input projection.
+        if self._has_tactile and OBS_TACTILES in batch:
+            for i, tac in enumerate(batch[OBS_TACTILES]):
+                if self._tactile_indices is not None:
+                    tac = tac[:, self._tactile_indices, :, :]  # (B, C, H, W) → slice C
+                # Adapt variable input channels → 3 for the shared tactile backbone
+                tac_adapted = self.tactile_input_proj[i](tac)
+                tac_features = self.tactile_backbone(tac_adapted)["feature_map"]
+                tac_pos_embed = self.encoder_tactile_feat_pos_embed(tac_features).to(dtype=tac_features.dtype)
+                tac_features = self.encoder_tactile_feat_input_proj(tac_features)
+
+                tac_features = einops.rearrange(tac_features, "b c h w -> (h w) b c")
+                tac_pos_embed = einops.rearrange(tac_pos_embed, "b c h w -> (h w) b c")
+
+                encoder_in_tokens.extend(list(tac_features))
+                encoder_in_pos_embed.extend(list(tac_pos_embed))
 
         # Stack all tokens along the sequence dimension.
         encoder_in_tokens = torch.stack(encoder_in_tokens, axis=0)

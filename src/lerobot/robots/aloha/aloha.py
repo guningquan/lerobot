@@ -22,6 +22,7 @@ from typing import Any
 from lerobot.cameras.utils import make_cameras_from_configs
 from lerobot.robots.viperx import ViperX
 from lerobot.robots.viperx.config_viperx import ViperXConfig
+from lerobot.tactile import make_tactile_sensors_from_configs
 
 from ..robot import Robot
 from .config_aloha import AlohaConfig
@@ -63,6 +64,7 @@ class Aloha(Robot):
         self.left_arm = ViperX(left_arm_config)
         self.right_arm = ViperX(right_arm_config)
         self.cameras = make_cameras_from_configs(config.cameras)
+        self.tactile_sensors = make_tactile_sensors_from_configs(config.tactile_sensors)
 
     @property
     def _motors_ft(self) -> dict[str, type]:
@@ -76,9 +78,17 @@ class Aloha(Robot):
             cam: (self.config.cameras[cam].height, self.config.cameras[cam].width, 3) for cam in self.cameras
         }
 
+    @property
+    def _tactile_ft(self) -> dict[str, tuple]:
+        """Tactile feature shapes: (channels, height, width) — channel-first for policy input."""
+        return {
+            f"tactile_{name}": (sensor.channels, sensor.height, sensor.width)
+            for name, sensor in self.tactile_sensors.items()
+        }
+
     @cached_property
     def observation_features(self) -> dict[str, type | tuple]:
-        return {**self._motors_ft, **self._cameras_ft}
+        return {**self._motors_ft, **self._cameras_ft, **self._tactile_ft}
 
     @cached_property
     def action_features(self) -> dict[str, type]:
@@ -90,6 +100,7 @@ class Aloha(Robot):
             self.left_arm.bus.is_connected
             and self.right_arm.bus.is_connected
             and all(cam.is_connected for cam in self.cameras.values())
+            and all(sensor.is_connected for sensor in self.tactile_sensors.values())
         )
 
     def connect(self, calibrate: bool = True) -> None:
@@ -98,6 +109,9 @@ class Aloha(Robot):
 
         for cam in self.cameras.values():
             cam.connect()
+
+        for sensor in self.tactile_sensors.values():
+            sensor.connect()
 
     @property
     def is_calibrated(self) -> bool:
@@ -132,6 +146,13 @@ class Aloha(Robot):
             dt_ms = (time.perf_counter() - start) * 1e3
             logger.debug(f"{self} read {cam_key}: {dt_ms:.1f}ms")
 
+        # Tactile sensors: prefixed with "tactile_" for feature routing (C,H,W)
+        for tac_key, sensor in self.tactile_sensors.items():
+            start = time.perf_counter()
+            obs_dict[f"tactile_{tac_key}"] = sensor.async_read()
+            dt_ms = (time.perf_counter() - start) * 1e3
+            logger.debug(f"{self} read tactile_{tac_key}: {dt_ms:.1f}ms")
+
         return obs_dict
 
     def send_action(self, action: dict[str, Any]) -> dict[str, Any]:
@@ -159,3 +180,6 @@ class Aloha(Robot):
 
         for cam in self.cameras.values():
             cam.disconnect()
+
+        for sensor in self.tactile_sensors.values():
+            sensor.disconnect()

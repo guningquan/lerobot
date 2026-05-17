@@ -15,8 +15,8 @@
 # limitations under the License.
 from dataclasses import dataclass, field
 
+from lerobot.configs.types import NormalizationMode, PolicyFeature
 from lerobot.configs.policies import PreTrainedConfig
-from lerobot.configs.types import NormalizationMode
 from lerobot.optim.optimizers import AdamWConfig
 
 
@@ -28,7 +28,7 @@ class ACTConfig(PreTrainedConfig):
     Defaults are configured for training on bimanual Aloha tasks like "insertion" or "transfer".
 
     The parameters you will most likely need to change are the ones which depend on the environment / sensors.
-    Those are: `input_shapes` and 'output_shapes`.
+    Those are: `input_features` and `output_features`.
 
     Notes on the inputs and outputs:
         - Either:
@@ -48,21 +48,12 @@ class ACTConfig(PreTrainedConfig):
             This should be no greater than the chunk size. For example, if the chunk size size 100, you may
             set this to 50. This would mean that the model predicts 100 steps worth of actions, runs 50 in the
             environment, and throws the other 50 out.
-        input_shapes: A dictionary defining the shapes of the input data for the policy. The key represents
-            the input data name, and the value is a list indicating the dimensions of the corresponding data.
-            For example, "observation.image" refers to an input from a camera with dimensions [3, 96, 96],
-            indicating it has three color channels and 96x96 resolution. Importantly, `input_shapes` doesn't
-            include batch dimension or temporal dimension.
-        output_shapes: A dictionary defining the shapes of the output data for the policy. The key represents
-            the output data name, and the value is a list indicating the dimensions of the corresponding data.
-            For example, "action" refers to an output shape of [14], indicating 14-dimensional actions.
-            Importantly, `output_shapes` doesn't include batch dimension or temporal dimension.
-        input_normalization_modes: A dictionary with key representing the modality (e.g. "observation.state"),
-            and the value specifies the normalization mode to apply. The two available modes are "mean_std"
-            which subtracts the mean and divides by the standard deviation and "min_max" which rescale in a
-            [-1, 1] range.
-        output_normalization_modes: Similar dictionary as `normalize_input_modes`, but to unnormalize to the
-            original scale. Note that this is also used for normalizing the training targets.
+        input_features: A dictionary defining the PolicyFeature of the input data for the policy. The key represents
+            the input data name, and the value is PolicyFeature, which consists of FeatureType and shape attributes.
+        output_features: A dictionary defining the PolicyFeature of the output data for the policy. The key represents
+            the output data name, and the value is PolicyFeature, which consists of FeatureType and shape attributes.
+        normalization_mapping: A dictionary that maps from a str value of FeatureType (e.g., "STATE", "VISUAL") to
+            a corresponding NormalizationMode (e.g., NormalizationMode.MIN_MAX)
         vision_backbone: Name of the torchvision resnet backbone to use for encoding images.
         pretrained_backbone_weights: Pretrained weights from torchvision to initialize the backbone.
             `None` means no pretrained weights.
@@ -132,6 +123,12 @@ class ACTConfig(PreTrainedConfig):
     dropout: float = 0.1
     kl_weight: float = 10.0
 
+    # Tactile ablation controls.
+    # use_tactile=False makes visual-only baselines ignore every tactile feature.
+    # tactile_channel_indices=None means use all tactile channels when use_tactile=True.
+    tactile_channel_indices: list[int] | None = None
+    use_tactile: bool = True
+
     # Training preset
     optimizer_lr: float = 1e-5
     optimizer_weight_decay: float = 1e-4
@@ -159,6 +156,8 @@ class ACTConfig(PreTrainedConfig):
             raise ValueError(
                 f"Multiple observation steps not handled yet. Got `nobs_steps={self.n_obs_steps}`"
             )
+        if self.tactile_channel_indices is not None and len(self.tactile_channel_indices) == 0:
+            raise ValueError("Use `use_tactile=False` for visual-only ACT baselines.")
 
     def get_optimizer_preset(self) -> AdamWConfig:
         return AdamWConfig(
@@ -170,8 +169,17 @@ class ACTConfig(PreTrainedConfig):
         return None
 
     def validate_features(self) -> None:
-        if not self.image_features and not self.env_state_feature:
-            raise ValueError("You must provide at least one image or the environment state among the inputs.")
+        if not self.image_features and not self.tactile_features and not self.env_state_feature:
+            raise ValueError(
+                "You must provide at least one image feature, tactile feature, "
+                "or environment state among the inputs."
+            )
+
+    @property
+    def tactile_features(self) -> dict[str, PolicyFeature]:
+        if not self.use_tactile:
+            return {}
+        return super().tactile_features
 
     @property
     def observation_delta_indices(self) -> None:

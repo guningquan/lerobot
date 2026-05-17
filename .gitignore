@@ -17,6 +17,7 @@
 .venv
 env/
 venv/
+mambaenv1/
 env.bak/
 venv.bak/
 .python-version

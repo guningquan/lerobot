@@ -14,7 +14,7 @@ from robot_utils import move_arms, torque_on, torque_off, move_grippers
 from real_env import make_real_env, get_action
 
 from interbotix_xs_modules.arm import InterbotixManipulatorXS
-from sleep_modify import sleep_all_robots,shut_down_all_robots
+from sleep import sleep_all_robots,shut_down_all_robots
 from pynput.keyboard import Key, Listener
 # import IPython
 # e = IPython.embed

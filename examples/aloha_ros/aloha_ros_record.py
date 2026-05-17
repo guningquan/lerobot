@@ -28,14 +28,19 @@ Usage:
 import sys
 import os
 import time
+import argparse
 import threading
 from pathlib import Path
 from typing import Any
 import numpy as np
 from tqdm import tqdm
 
+# from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
+from lerobot.cameras.realsense.configuration_realsense import RealSenseCameraConfig
 from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
+from lerobot.tactile.config import TactileSensorMode
+from lerobot.tactile.xense_g1ws.config_xense_g1ws import XENSEG1WSConfig
 from lerobot.datasets.utils import hw_to_dataset_features
 from lerobot.processor import make_default_processors
 from lerobot.processor.core import RobotAction, RobotObservation
@@ -51,88 +56,137 @@ from lerobot.utils.robot_utils import precise_sleep
 from lerobot.processor.converters import robot_action_observation_to_transition, transition_to_robot_action
 
 # Import constants from aloha_scripts/constants.py
-script_dir = os.path.dirname(os.path.abspath(__file__))
-aloha_scripts_dir = os.path.join(script_dir, 'aloha_scripts')
-if aloha_scripts_dir not in sys.path:
-    sys.path.insert(0, aloha_scripts_dir)
-
-from constants import (
+from aloha_scripts.constants import (
     START_ARM_POSE,
-    MASTER_GRIPPER_JOINT_OPEN,
-    MASTER_GRIPPER_JOINT_CLOSE,
-    MASTER_GRIPPER_JOINT_MID,
-    PUPPET_GRIPPER_JOINT_OPEN,
-    PUPPET_GRIPPER_JOINT_CLOSE,
-    MASTER2PUPPET_JOINT_FN,
-    FPS
+    FPS,
+    TASK_CONFIGS,
 )
 
+# Default task (overridden by --task CLI argument)
+DEFAULT_TASK = "aloha_wear_shoe"
 
-# Recording configuration
-NUM_EPISODES = 2
-EPISODE_TIME_SEC = 20
-RESET_TIME_SEC = 5
-TASK_DESCRIPTION = "My task description"
-HF_REPO_ID = "guningquan2025/aloha_ros_record"
+# Per-arm start poses: left master wrist_angle tuned down due to calibration offset
+MASTER_LEFT_START  = START_ARM_POSE[:6]
+MASTER_RIGHT_START = START_ARM_POSE[:6]
+PUPPET_LEFT_START  = START_ARM_POSE[:6]
+PUPPET_RIGHT_START = START_ARM_POSE[:6]
 
-# Dataset root directory (optional)
-# If None, dataset will be saved to ~/.cache/huggingface/lerobot/{HF_REPO_ID}
-# You can specify a custom path like: DATASET_ROOT = "/path/to/your/dataset"
+# ---------- 实测夹爪校准值 (2026-05-13) ----------
+# master_left:  open= 0.7517, close=-0.0752
+# master_right: open= 0.8191, close=-0.0552
+# puppet_left:  open= 0.3068, close=-1.2717
+# puppet_right: open= 0.1212, close=-1.3514
+# ------------------------------------------------
+MASTER_LEFT_GRIPPER_OPEN  = 0.7517
+MASTER_LEFT_GRIPPER_CLOSE = -0.0752
+PUPPET_LEFT_GRIPPER_OPEN  = 0.3068
+PUPPET_LEFT_GRIPPER_CLOSE = -1.2717
 
-DATASET_ROOT = '/home/robot/Dataset_and_Checkpoint/lerobot-dataset/testlerobot'  # Set to None for default location, or specify a Path/str
+MASTER_RIGHT_GRIPPER_OPEN  = 0.8191
+MASTER_RIGHT_GRIPPER_CLOSE = -0.0552
+PUPPET_RIGHT_GRIPPER_OPEN  = 0.1212
+PUPPET_RIGHT_GRIPPER_CLOSE = -1.3514
+
+def _normalize(x, lo, hi): return (x - lo) / (hi - lo)
+def _unnormalize(x, lo, hi): return x * (hi - lo) + lo
+
+def master2puppet_left(master_val):
+    n = _normalize(master_val, MASTER_LEFT_GRIPPER_CLOSE, MASTER_LEFT_GRIPPER_OPEN)
+    return _unnormalize(n, PUPPET_LEFT_GRIPPER_CLOSE, PUPPET_LEFT_GRIPPER_OPEN)
+
+def master2puppet_right(master_val):
+    n = _normalize(master_val, MASTER_RIGHT_GRIPPER_CLOSE, MASTER_RIGHT_GRIPPER_OPEN)
+    return _unnormalize(n, PUPPET_RIGHT_GRIPPER_CLOSE, PUPPET_RIGHT_GRIPPER_OPEN)
+
+MASTER_LEFT_GRIPPER_MID  = (MASTER_LEFT_GRIPPER_OPEN  + MASTER_LEFT_GRIPPER_CLOSE) / 2
+MASTER_RIGHT_GRIPPER_MID = (MASTER_RIGHT_GRIPPER_OPEN + MASTER_RIGHT_GRIPPER_CLOSE) / 2
+PUPPET_LEFT_GRIPPER_CLOSE_VAL = PUPPET_LEFT_GRIPPER_CLOSE
+PUPPET_RIGHT_GRIPPER_CLOSE_VAL = PUPPET_RIGHT_GRIPPER_CLOSE
+
+
+# (dataset_root configured in main() from --task arg)
 
 # Camera configuration (same as aloha_ros_teleop.py)
 camera_config = {
-    "cam_high": OpenCVCameraConfig(
-        index_or_path="/dev/CAM_HIGH", 
+    "cam_high": RealSenseCameraConfig(
+        serial_number_or_name="109422062625", 
+        fps=30,
         width=640, 
-        height=480, 
-        fps=FPS
+        height=480
     ),
-    "cam_right_wrist": OpenCVCameraConfig(
-        index_or_path="/dev/CAM_RIGHT_WRIST", 
-        width=640, 
-        height=480, 
-        fps=FPS
+    "cam_right_wrist": OpenCVCameraConfig(  # librealsense v4l2 bug on this camera, use OpenCV
+        index_or_path="/dev/CAM_RIGHT_WRIST",
+        fps=30,
+        width=640,
+        height=480,
     ),
-    "cam_left_wrist": OpenCVCameraConfig(
-        index_or_path="/dev/CAM_LEFT_WRIST", 
+    "cam_left_wrist": RealSenseCameraConfig(
+        serial_number_or_name="134222077139", 
+        fps=30,
         width=640, 
-        height=480, 
-        fps=FPS
+        height=480
     ),
-    "cam_low": OpenCVCameraConfig(
-        index_or_path="/dev/CAM_LOW", 
-        width=640, 
-        height=480, 
-        fps=FPS
+    "cam_low": RealSenseCameraConfig(
+        serial_number_or_name="936322072119",
+        fps=30,
+        width=640,
+        height=480
+    ),
+}
+
+# ── Tactile sensor configuration (4 XENSE G1-WS sensors) ────────────
+TACTILE_MODE = TactileSensorMode.FULL  # 10-ch: rectify+depth+force+force_norm+marker2d
+# TACTILE_MODE = TactileSensorMode.SIMPLE  # 3-ch grayscale (GelSight-equivalent)
+
+tactile_config = {
+    "left_fingertip": XENSEG1WSConfig(
+        serial_number="OG000635",
+        mode=TACTILE_MODE,
+        fps=FPS,
+        width=160, height=120,
+        mock=False,
+    ),
+    "left_knuckle": XENSEG1WSConfig(
+        serial_number="OG000707",
+        mode=TACTILE_MODE,
+        fps=FPS,
+        width=160, height=120,
+        mock=False,
+    ),
+    "right_fingertip": XENSEG1WSConfig(
+        serial_number="OG000614",
+        mode=TACTILE_MODE,
+        fps=FPS,
+        width=160, height=120,
+        mock=False,
+    ),
+    "right_knuckle": XENSEG1WSConfig(
+        serial_number="OG000706",
+        mode=TACTILE_MODE,
+        fps=FPS,
+        width=160, height=120,
+        mock=False,
     ),
 }
 
 
 class AlohaGripperMapperStep(RobotActionProcessorStep):
-    """Maps master gripper joint values to puppet gripper joint values using MASTER2PUPPET_JOINT_FN."""
-    
+    """Maps master gripper joint values to puppet gripper joint values using per-side calibration."""
+
     def __init__(self):
         super().__init__()
-        self.master2puppet_fn = MASTER2PUPPET_JOINT_FN
-    
+
     def action(self, action: dict[str, float]) -> dict[str, float]:
         """Map master gripper values to puppet gripper values."""
-        # Map left gripper
         if "left_gripper.pos" in action:
-            action["left_gripper.pos"] = self.master2puppet_fn(action["left_gripper.pos"])
-        
-        # Map right gripper
+            action["left_gripper.pos"] = master2puppet_left(action["left_gripper.pos"])
         if "right_gripper.pos" in action:
-            action["right_gripper.pos"] = self.master2puppet_fn(action["right_gripper.pos"])
-        
+            action["right_gripper.pos"] = master2puppet_right(action["right_gripper.pos"])
         return action
-    
+
     def transform_features(
         self, features: dict[str, dict[str, Any]]
     ) -> dict[str, dict[str, Any]]:
-        """Features remain unchanged, only values are mapped."""
         return features
 
 def get_arm_joint_positions(bot):
@@ -212,20 +266,74 @@ def prep_robots(master_left, master_right, puppet_left, puppet_right):
     puppet_right.bot.dxl.robot_torque_enable("group", "arm", True)
     puppet_right.bot.dxl.robot_torque_enable("single", "gripper", True)
     
-    # Move arms to starting position smoothly
-    start_arm_qpos = START_ARM_POSE[:6]
+    # Move arms to starting position
     print("Moving all arms to starting position...")
-    move_arms_smoothly([master_left, master_right, puppet_left, puppet_right], [start_arm_qpos] * 4, move_time=1)
+    move_arms_smoothly(
+        [master_left, master_right, puppet_left, puppet_right],
+        [MASTER_LEFT_START, MASTER_RIGHT_START, PUPPET_LEFT_START, PUPPET_RIGHT_START],
+        move_time=1,
+    )
     
     # Move grippers to starting position smoothly
     print("Moving grippers to starting position...")
     move_grippers_smoothly(
         [master_left, master_right, puppet_left, puppet_right],
-        [MASTER_GRIPPER_JOINT_MID, MASTER_GRIPPER_JOINT_MID, PUPPET_GRIPPER_JOINT_CLOSE, PUPPET_GRIPPER_JOINT_CLOSE],
+        [MASTER_LEFT_GRIPPER_MID, MASTER_RIGHT_GRIPPER_MID, PUPPET_LEFT_GRIPPER_CLOSE_VAL, PUPPET_RIGHT_GRIPPER_CLOSE_VAL],
         move_time=0.5
     )
     
     print("Robots prepared and moved to starting position.")
+
+
+def reset_after_episode(master_left, master_right, puppet_left, puppet_right):
+    """Release the object, then return all arms and grippers to the next-episode ready pose."""
+    print("\nResetting after episode...")
+    print("Enabling position control for reset...")
+
+    master_left.bot.dxl.robot_set_operating_modes("group", "arm", "position")
+    master_left.bot.dxl.robot_set_operating_modes("single", "gripper", "position")
+    master_right.bot.dxl.robot_set_operating_modes("group", "arm", "position")
+    master_right.bot.dxl.robot_set_operating_modes("single", "gripper", "position")
+
+    master_left.bot.dxl.robot_torque_enable("group", "arm", True)
+    master_left.bot.dxl.robot_torque_enable("single", "gripper", True)
+    master_right.bot.dxl.robot_torque_enable("group", "arm", True)
+    master_right.bot.dxl.robot_torque_enable("single", "gripper", True)
+    puppet_left.bot.dxl.robot_torque_enable("group", "arm", True)
+    puppet_left.bot.dxl.robot_torque_enable("single", "gripper", True)
+    puppet_right.bot.dxl.robot_torque_enable("group", "arm", True)
+    puppet_right.bot.dxl.robot_torque_enable("single", "gripper", True)
+
+    print("Holding final pose for 2 seconds before releasing object...")
+    time.sleep(2.0)
+
+    print("Opening puppet grippers to release object...")
+    move_grippers_smoothly(
+        [puppet_left, puppet_right],
+        [PUPPET_LEFT_GRIPPER_OPEN, PUPPET_RIGHT_GRIPPER_OPEN],
+        move_time=0.5,
+    )
+
+    print("Moving all arms to starting position...")
+    move_arms_smoothly(
+        [master_left, master_right, puppet_left, puppet_right],
+        [MASTER_LEFT_START, MASTER_RIGHT_START, PUPPET_LEFT_START, PUPPET_RIGHT_START],
+        move_time=1,
+    )
+
+    print("Setting grippers to next-episode ready state...")
+    move_grippers_smoothly(
+        [master_left, master_right, puppet_left, puppet_right],
+        [
+            MASTER_LEFT_GRIPPER_MID,
+            MASTER_RIGHT_GRIPPER_MID,
+            PUPPET_LEFT_GRIPPER_CLOSE,
+            PUPPET_RIGHT_GRIPPER_CLOSE,
+        ],
+        move_time=0.5,
+    )
+
+    print("Reset complete. Robots are ready for the next episode.")
 
 
 
@@ -235,21 +343,25 @@ def press_to_start(master_left, master_right):
     master_left.bot.dxl.robot_torque_enable("single", "gripper", False)
     master_right.bot.dxl.robot_torque_enable("single", "gripper", False)
     print('Close both master grippers to start...')
-    close_thresh = -0.3
+    close_thresh_left = 0.0
+    close_thresh_right = 0.0
     pressed_left = False
     pressed_right = False
     while not (pressed_left and pressed_right):
         t1 = time.perf_counter()
+
+        gripper_pos_left = get_arm_gripper_positions(master_left)
+        gripper_pos_right = get_arm_gripper_positions(master_right)
+        print(f"实时夹爪位置 - 左: {gripper_pos_left:.3f}, 右: {gripper_pos_right:.3f}", end='\r')
+
         if not pressed_left:
-            gripper_pos_left = get_arm_gripper_positions(master_left)
-            if gripper_pos_left < close_thresh:
+            if gripper_pos_left < close_thresh_left:
                 pressed_left = True
-                print("Left gripper closed!")
+                print("\nLeft gripper closed!")
         if not pressed_right:
-            gripper_pos_right = get_arm_gripper_positions(master_right)
-            if gripper_pos_right < close_thresh:
+            if gripper_pos_right < close_thresh_right:
                 pressed_right = True
-                print("Right gripper closed!")
+                print("\nRight gripper closed!")
         precise_sleep(max(1.0 / FPS - (time.perf_counter() - t1), 0.0))
     
     # Turn off master arm torque (master should be in PWM mode for teleoperation)
@@ -263,6 +375,27 @@ def press_to_start(master_left, master_right):
 
 
 def main():
+    parser = argparse.ArgumentParser(description="ALOHA ROS bimanual recording with tactile")
+    parser.add_argument("--task_name", type=str, default=DEFAULT_TASK,
+                        choices=list(TASK_CONFIGS.keys()),
+                        help=f"Task name from TASK_CONFIGS (default: {DEFAULT_TASK})")
+    parser.add_argument("--episodes", type=int, default=None,
+                        help="Override num_episodes from TASK_CONFIGS")
+    parser.add_argument("--duration", type=int, default=None,
+                        help="Episode duration in seconds (override episode_len/FPS)")
+    parser.add_argument("--episode_idx", type=int, default=0,
+                        help="Starting episode index for resuming data collection")
+    args = parser.parse_args()
+
+    task_cfg = TASK_CONFIGS[args.task_name]
+    task_name = args.task_name
+    num_episodes = args.episodes if args.episodes is not None else task_cfg["num_episodes"]
+    episode_time_sec = args.duration if args.duration is not None else int(task_cfg["episode_len"] / FPS)
+    hf_repo_id = f"theodoreliu/{task_name}"
+    dataset_root = f"/home/robot/Dataset_and_Checkpoint/lerobot-dataset/{hf_repo_id}"
+
+    print(f"Task: {task_name} | Episodes: {num_episodes} | Duration: {episode_time_sec}s | Dataset: {dataset_root}")
+
     # Create master arms config (teleoperators) - same naming as aloha_ros_teleop.py
     master_config = AlohaTeleopRosConfig(
         id="aloha_master",
@@ -280,6 +413,7 @@ def main():
         robot_model="vx300s",
         init_ros_node=False,  # Node already initialized by master
         cameras=camera_config,
+        tactile_sensors=tactile_config,
     )
 
     # Initialize the robot and teleoperator - same naming as aloha_ros_teleop.py
@@ -307,55 +441,36 @@ def main():
     dataset_features = {**action_features, **obs_features}
 
     # Create or load existing dataset
-    # Dataset will be saved to: DATASET_ROOT/{HF_REPO_ID} if DATASET_ROOT is specified
-    # Otherwise: ~/.cache/huggingface/lerobot/{HF_REPO_ID}
+    # Dataset will be saved to: dataset_root/{hf_repo_id} if dataset_root is specified
+    # Otherwise: ~/.cache/huggingface/lerobot/{hf_repo_id}
     # Videos will be saved in: {dataset_root}/videos/observation.images.{camera_name}/chunk-{N}/file-{M}.mp4
     
     # Check if dataset already exists
-    # dataset_path = Path(DATASET_ROOT) / HF_REPO_ID if DATASET_ROOT else None
-    dataset_path = Path(DATASET_ROOT) if DATASET_ROOT else None
-    dataset_exists = False
-    existing_episodes = 0
+    # dataset_path = Path(dataset_root) / hf_repo_id if dataset_root else None
+    dataset_path = Path(dataset_root) if dataset_root else None
+    existing_episodes = args.episode_idx
     
-    if dataset_path and dataset_path.exists():
+    if dataset_path and dataset_path.exists() and args.episode_idx == 0:
         try:
-            # Try to load existing dataset to check episode count
             existing_dataset = LeRobotDataset(
-                repo_id=HF_REPO_ID,
-                root=DATASET_ROOT,
-                download_videos=False,  # Don't download videos when checking
-            )
+                repo_id=hf_repo_id, root=dataset_root, download_videos=False)
             existing_episodes = existing_dataset.num_episodes
-            dataset_exists = True
             print(f"\n{'='*60}")
-            print(f"EXISTING DATASET FOUND!")
-            print(f"{'='*60}")
-            print(f"Dataset location: {existing_dataset.root}")
-            print(f"Already recorded episodes: {existing_episodes}")
-            print(f"Total frames: {existing_dataset.num_frames}")
+            print(f"EXISTING DATASET FOUND! ({existing_episodes} episodes)")
             print(f"{'='*60}\n")
         except Exception as e:
             print(f"Warning: Could not load existing dataset: {e}")
             print("Creating new dataset...")
-            dataset_exists = False
-    
-    # Create or continue dataset
+
     dataset = LeRobotDataset.create(
-        repo_id=HF_REPO_ID,
-        fps=FPS,
-        features=dataset_features,
-        robot_type=puppet.name,
-        use_videos=True,
-        image_writer_threads=4 * len(puppet.cameras) if puppet.cameras else 4,
-        root=DATASET_ROOT,  # Specify custom root directory if needed
+        repo_id=hf_repo_id, fps=FPS, features=dataset_features,
+        robot_type=puppet.name, use_videos=True,
+        image_writer_threads=4 * len(puppet.cameras) + 4 * len(puppet.tactile_sensors),
+        root=dataset_root,
     )
-    
-    # If dataset existed, update episode count
-    if dataset_exists:
-        # Load metadata to get current episode count
-        dataset.meta.load_metadata()
-        existing_episodes = dataset.meta.total_episodes
-        print(f"Continuing recording from episode {existing_episodes + 1}")
+
+    if existing_episodes > 0:
+        print(f"Recording from episode {existing_episodes + 1}")
     
     print(f"Dataset will be saved to: {dataset.root}")
     print(f"Videos will be saved in: {dataset.root / 'videos'}")
@@ -366,7 +481,7 @@ def main():
 
     # Initialize the keyboard listener and rerun visualization
     listener, events = init_keyboard_listener()
-    init_rerun(session_name="aloha_ros_record")
+    # init_rerun(session_name="aloha_ros_record")  # disabled: no rerun viewer in headless mode
 
     if not puppet.is_connected or not master.is_connected:
         raise ValueError("Robot or teleoperator is not connected!")
@@ -374,30 +489,31 @@ def main():
     print("\n" + "="*60)
     print("RECORDING SETUP COMPLETE")
     print("="*60)
-    print(f"Episodes to record in this session: {NUM_EPISODES}")
-    if dataset_exists:
+    print(f"Episodes to record in this session: {num_episodes}")
+    if existing_episodes > 0:
         print(f"Already recorded episodes: {existing_episodes}")
-        print(f"Total episodes after this session: {existing_episodes + NUM_EPISODES}")
-    print(f"Episode duration: {EPISODE_TIME_SEC} seconds")
+        print(f"Total episodes after this session: {existing_episodes + num_episodes}")
+    print(f"Episode duration: {episode_time_sec} seconds")
     # print(f"Reset duration: {RESET_TIME_SEC} seconds")
-    print(f"Task: {TASK_DESCRIPTION}")
+    print(f"Task: {task_name}")
     print("\nKeyboard Controls:")
     print("  → (Right Arrow): End current episode early (if task completed)")
     print("  ← (Left Arrow): End current episode and re-record it")
     print("  ESC: Stop recording completely")
     print("="*60 + "\n")
 
+    print("\n" + "="*60)
+    print("PREPARING ROBOTS - Moving to initial position...")
+    print("="*60)
+    prep_robots(master.left_arm, master.right_arm, puppet.left_arm, puppet.right_arm)
+    print("="*60 + "\n")
+
     recorded_episodes = 0
-    while recorded_episodes < NUM_EPISODES and not events["stop_recording"]:
-        # Prepare robots: move to starting position (every time at the beginning)
-        print("\n" + "="*60)
-        print("PREPARING ROBOTS - Moving to initial position...")
-        print("="*60)
-        prep_robots(master.left_arm, master.right_arm, puppet.left_arm, puppet.right_arm)
-        print("="*60 + "\n")
+    needs_final_reset = False
+    while recorded_episodes < num_episodes and not events["stop_recording"]:
         current_episode_num = existing_episodes + recorded_episodes + 1
         print(f"\n{'='*60}")
-        print(f"EPISODE {recorded_episodes + 1} of {NUM_EPISODES} (Total: {current_episode_num})")
+        print(f"EPISODE {recorded_episodes + 1} of {num_episodes} (Total: {current_episode_num})")
         print(f"{'='*60}")
         log_say(f"Recording episode {current_episode_num}")
         
@@ -412,17 +528,19 @@ def main():
             fps=FPS,
             dataset=dataset,
             teleop=master,
-            control_time_s=EPISODE_TIME_SEC,
-            single_task=TASK_DESCRIPTION,
+            control_time_s=episode_time_sec,
+            single_task=task_name,
             display_data=True,
             teleop_action_processor=teleop_action_processor,
             robot_action_processor=robot_action_processor,
             robot_observation_processor=robot_observation_processor,
         )
 
+        needs_final_reset = True
+
         # # Reset the environment if not stopping or re-recording
         # if not events["stop_recording"] and (
-        #     (recorded_episodes < NUM_EPISODES - 1) or events["rerecord_episode"]
+        #     (recorded_episodes < num_episodes - 1) or events["rerecord_episode"]
         # ):  
         #     print("Reset the environment")
         #     log_say("Reset the environment")
@@ -432,7 +550,7 @@ def main():
         #         fps=FPS,
         #         teleop=master,
         #         control_time_s=RESET_TIME_SEC,
-        #         single_task=TASK_DESCRIPTION,
+        #         single_task=task_name,
         #         display_data=True,
         #         teleop_action_processor=teleop_action_processor,
         #         robot_action_processor=robot_action_processor,
@@ -444,10 +562,14 @@ def main():
             events["rerecord_episode"] = False
             events["exit_early"] = False
             dataset.clear_episode_buffer()
+            reset_after_episode(master.left_arm, master.right_arm, puppet.left_arm, puppet.right_arm)
+            needs_final_reset = False
             continue
 
         # Save episode only if not stopping recording
         if not events["stop_recording"]:
+            reset_after_episode(master.left_arm, master.right_arm, puppet.left_arm, puppet.right_arm)
+            needs_final_reset = False
             dataset.save_episode()
             recorded_episodes += 1
         else:
@@ -455,12 +577,21 @@ def main():
             dataset.clear_episode_buffer()
             print("Recording stopped. Current episode discarded.")
 
+    # Return all arms to start pose before cleanup
+    if needs_final_reset:
+        print("\nReturning arms to start position...")
+        reset_after_episode(master.left_arm, master.right_arm, puppet.left_arm, puppet.right_arm)
+        print("Arms at start position. You can now run sleep.py.")
+    else:
+        print("\nArms already at start position. You can now run sleep.py.")
+
     # Clean up
     print("Stop recording")
     log_say("Stop recording")
     puppet.disconnect()
     master.disconnect()
-    listener.stop()
+    if listener is not None:
+        listener.stop()
 
     dataset.finalize()
     print(f"\nDataset saved to: {dataset.root}")
@@ -468,9 +599,8 @@ def main():
     
     # Uncomment to push to HuggingFace Hub
     # dataset.push_to_hub()
-    # log_say(f"Dataset '{HF_REPO_ID}' pushed to HuggingFace Hub")
+    # log_say(f"Dataset '{hf_repo_id}' pushed to HuggingFace Hub")
 
 
 if __name__ == "__main__":
     main()
-

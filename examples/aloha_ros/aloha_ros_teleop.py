@@ -29,14 +29,40 @@ if aloha_scripts_dir not in sys.path:
 
 from constants import (
     START_ARM_POSE,
-    MASTER_GRIPPER_JOINT_OPEN,
-    MASTER_GRIPPER_JOINT_CLOSE,
-    MASTER_GRIPPER_JOINT_MID,
-    PUPPET_GRIPPER_JOINT_OPEN,
-    PUPPET_GRIPPER_JOINT_CLOSE,
-    MASTER2PUPPET_JOINT_FN,
     FPS
 )
+
+# ---------- 实测夹爪校准值 (2026-05-08) ----------
+# master_left:  open= 0.6796, close=-0.2393
+# master_right: open= 0.8468, close=-0.0537
+# puppet_left:  open=-0.2562, close=-1.7871
+# puppet_right: open=-0.0430, close=-1.6168
+# ------------------------------------------------
+MASTER_LEFT_GRIPPER_OPEN  = 0.6796
+MASTER_LEFT_GRIPPER_CLOSE = -0.2393
+PUPPET_LEFT_GRIPPER_OPEN  = -0.2562
+PUPPET_LEFT_GRIPPER_CLOSE = -1.7871
+
+MASTER_RIGHT_GRIPPER_OPEN  = 0.8468
+MASTER_RIGHT_GRIPPER_CLOSE = -0.0537
+PUPPET_RIGHT_GRIPPER_OPEN  = -0.0430
+PUPPET_RIGHT_GRIPPER_CLOSE = -1.6168
+
+def _normalize(x, lo, hi): return (x - lo) / (hi - lo)
+def _unnormalize(x, lo, hi): return x * (hi - lo) + lo
+
+def master2puppet_left(master_val):
+    n = _normalize(master_val, MASTER_LEFT_GRIPPER_CLOSE, MASTER_LEFT_GRIPPER_OPEN)
+    return _unnormalize(n, PUPPET_LEFT_GRIPPER_CLOSE, PUPPET_LEFT_GRIPPER_OPEN)
+
+def master2puppet_right(master_val):
+    n = _normalize(master_val, MASTER_RIGHT_GRIPPER_CLOSE, MASTER_RIGHT_GRIPPER_OPEN)
+    return _unnormalize(n, PUPPET_RIGHT_GRIPPER_CLOSE, PUPPET_RIGHT_GRIPPER_OPEN)
+
+MASTER_LEFT_GRIPPER_MID  = (MASTER_LEFT_GRIPPER_OPEN  + MASTER_LEFT_GRIPPER_CLOSE) / 2
+MASTER_RIGHT_GRIPPER_MID = (MASTER_RIGHT_GRIPPER_OPEN + MASTER_RIGHT_GRIPPER_CLOSE) / 2
+PUPPET_LEFT_GRIPPER_CLOSE_VAL = PUPPET_LEFT_GRIPPER_CLOSE
+PUPPET_RIGHT_GRIPPER_CLOSE_VAL = PUPPET_RIGHT_GRIPPER_CLOSE
 
 # Try to import pynput for keyboard listening
 try:
@@ -84,25 +110,34 @@ master_config = AlohaTeleopRosConfig(
 )
 
 # Create puppet arms config (robots)
+# Note: cameras removed because ROS usb_cam nodes already own the devices.
+# For teleop-only verification, cameras are not needed.
 puppet_config = AlohaRosConfig(
     id="aloha_puppet",
     puppet_left_robot_name="puppet_left",
     puppet_right_robot_name="puppet_right",
     robot_model="vx300s",
     init_ros_node=False,  # Node already initialized by master
-    cameras=camera_config,
 )
 
 # Initialize visualization
 init_rerun(session_name="aloha_ros_teleop")
 
+from lerobot.utils.errors import DeviceAlreadyConnectedError
+
 # Create and connect master arms (teleoperators)
 master = AlohaTeleopRos(master_config)
-master.connect()
+try:
+    master.connect()
+except DeviceAlreadyConnectedError:
+    print("Master arms already connected from previous run, continuing...")
 
 # Create and connect puppet arms (robots)
 puppet = AlohaRos(puppet_config)
-puppet.connect()
+try:
+    puppet.connect()
+except DeviceAlreadyConnectedError:
+    print("Puppet arms already connected from previous run, continuing...")
 
 
 def get_arm_joint_positions(bot):
@@ -184,7 +219,7 @@ def prep_robots(master_left, master_right, puppet_left, puppet_right):
     print("Moving grippers to starting position...")
     move_grippers_smoothly(
         [master_left, master_right, puppet_left, puppet_right],
-        [MASTER_GRIPPER_JOINT_MID, MASTER_GRIPPER_JOINT_MID, PUPPET_GRIPPER_JOINT_CLOSE, PUPPET_GRIPPER_JOINT_CLOSE],
+        [MASTER_LEFT_GRIPPER_MID, MASTER_RIGHT_GRIPPER_MID, PUPPET_LEFT_GRIPPER_CLOSE_VAL, PUPPET_RIGHT_GRIPPER_CLOSE_VAL],
         move_time=0.5
     )
     
@@ -207,19 +242,21 @@ def press_to_start(master_left, master_right):
     master_left.bot.dxl.robot_torque_enable("single", "gripper", False)
     master_right.bot.dxl.robot_torque_enable("single", "gripper", False)
     print('Close both master grippers to start...')
-    close_thresh = -0.3
+    # Per-side close thresholds: left close=-0.2393, right close=-0.0537. Use 0.0 as conservative.
+    close_thresh_left = 0.0
+    close_thresh_right = 0.0
     pressed_left = False
     pressed_right = False
     while not (pressed_left and pressed_right):
         t1 = time.perf_counter()
         if not pressed_left:
             gripper_pos_left = get_arm_gripper_positions(master_left)
-            if gripper_pos_left < close_thresh:
+            if gripper_pos_left < close_thresh_left:
                 pressed_left = True
                 print("Left gripper closed!")
         if not pressed_right:
             gripper_pos_right = get_arm_gripper_positions(master_right)
-            if gripper_pos_right < close_thresh:
+            if gripper_pos_right < close_thresh_right:
                 pressed_right = True
                 print("Right gripper closed!")
         precise_sleep(max(1.0 / FPS - (time.perf_counter() - t1), 0.0))
@@ -287,14 +324,14 @@ try:
         # Sync gripper positions (with mapping function) - left arm
         if master_left_joint_states and len(master_left_joint_states.position) > 6:
             master_left_gripper_joint = master_left_joint_states.position[6]
-            puppet_left_gripper_joint_target = MASTER2PUPPET_JOINT_FN(master_left_gripper_joint)
+            puppet_left_gripper_joint_target = master2puppet_left(master_left_gripper_joint)
             gripper_command_left.cmd = puppet_left_gripper_joint_target
             puppet.left_arm.bot.gripper.core.pub_single.publish(gripper_command_left)
         
         # Sync gripper positions (with mapping function) - right arm
         if master_right_joint_states and len(master_right_joint_states.position) > 6:
             master_right_gripper_joint = master_right_joint_states.position[6]
-            puppet_right_gripper_joint_target = MASTER2PUPPET_JOINT_FN(master_right_gripper_joint)
+            puppet_right_gripper_joint_target = master2puppet_right(master_right_gripper_joint)
             gripper_command_right.cmd = puppet_right_gripper_joint_target
             puppet.right_arm.bot.gripper.core.pub_single.publish(gripper_command_right)
         

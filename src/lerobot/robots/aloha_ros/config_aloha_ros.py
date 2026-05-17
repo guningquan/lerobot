@@ -15,6 +15,7 @@
 from dataclasses import dataclass, field
 
 from lerobot.cameras.configs import CameraConfig
+from lerobot.tactile.config import TactileSensorConfig
 from ..config import RobotConfig
 
 
@@ -24,12 +25,15 @@ class AlohaRosConfig(RobotConfig):
     # ROS robot names for puppet arms
     puppet_left_robot_name: str = "puppet_left"
     puppet_right_robot_name: str = "puppet_right"
-    
+
     # Robot model type
     robot_model: str = "vx300s"
-    
+
     # ROS node initialization (only first arm initializes node)
     init_ros_node: bool = True
-    
+
     # Camera configuration (shared between both arms)
     cameras: dict[str, CameraConfig] = field(default_factory=dict)
+
+    # Tactile sensor configuration (attached to follower grippers)
+    tactile_sensors: dict[str, TactileSensorConfig] = field(default_factory=dict)

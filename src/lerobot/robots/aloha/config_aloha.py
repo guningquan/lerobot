@@ -17,6 +17,7 @@
 from dataclasses import dataclass, field
 
 from lerobot.cameras import CameraConfig
+from lerobot.tactile.config import TactileSensorConfig
 
 from ..config import RobotConfig
 
@@ -37,3 +38,6 @@ class AlohaConfig(RobotConfig):
 
     # cameras (shared between both arms)
     cameras: dict[str, CameraConfig] = field(default_factory=dict)
+
+    # tactile sensors (mounted on follower grippers)
+    tactile_sensors: dict[str, TactileSensorConfig] = field(default_factory=dict)
