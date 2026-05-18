@@ -141,6 +141,7 @@ class AlohaRos(Robot):
             import time as _time
             logger.info(f"Connecting tactile sensor: {name} ...")
             sensor.connect()
+            _time.sleep(2.0)
             _time.sleep(1.0)  # Allow SDK camera resources to stabilise
 
         self.configure()

@@ -62,7 +62,7 @@ def shut_down_puppet_robots():
     puppet_bot_right = InterbotixManipulatorXS(robot_model="vx300s", group_name="arm", gripper_name="gripper",
                                                robot_name='puppet_right', init_node=False)
 
-    puppet_sleep_position = (0, -1.85, 1.6, 0.12, 0.65, 0)
+    puppet_sleep_position = (0, -1.85, 1.7, 0.12, 0.75, 0)
     PUPPET_GRIPPER_JOINT_OPEN = 0.0414
 
     # 创建线程

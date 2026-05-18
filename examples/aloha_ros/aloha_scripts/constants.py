@@ -652,7 +652,7 @@ TASK_CONFIGS = {
     'aloha_slip_hold_or_pull': {  # Level 2/3: controlled slip / grasp stability
         'dataset_dir': DATA_DIR + '/aloha_slip_hold_or_pull',
         'num_episodes': 50,
-        'episode_len': 750,
+        'episode_len': 600,
         'camera_names': ['cam_high', 'cam_low', 'cam_left_wrist', 'cam_right_wrist']
     },
     'aloha_pressure_wipe': {  # Level 2/3: simplified continuous-contact force control
