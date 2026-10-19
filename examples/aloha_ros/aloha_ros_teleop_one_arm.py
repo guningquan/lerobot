@@ -193,11 +193,13 @@ def press_to_start(master_bot):
     # Disable torque for only gripper joint of master robot to allow user movement
     master_bot.bot.dxl.robot_torque_enable("single", "gripper", False)
     print(f'Close the {ARM_SIDE} master gripper to start...')
-    close_thresh = -0.3
+    close_thresh = 0.3
     pressed = False
     while not pressed:
         t1 = time.perf_counter()
         gripper_pos = get_arm_gripper_positions(master_bot)
+        # Print the current reading of the right main arm gripper in real time.
+        print(f"DEBUG - Right Master Gripper Pos: {gripper_pos}")
         if gripper_pos < close_thresh:
             pressed = True
         precise_sleep(max(1.0 / FPS - (time.perf_counter() - t1), 0.0))

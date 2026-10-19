@@ -31,10 +31,10 @@ def shut_down_all_robots():
     master_bot_right = InterbotixManipulatorXS(robot_model="wx250s", group_name="arm", gripper_name="gripper",
                                                robot_name='master_right', init_node=False)
 
-    puppet_sleep_position = (0, -1.7, 1.55, 0.12, 0.65, 0)
-    master_sleep_position = (0, -1.76, 1.55, 0, 0.0, 0)
-    PUPPET_GRIPPER_JOINT_OPEN = 1.4910
-    MASTER_GRIPPER_JOINT_OPEN = 0.02417
+    puppet_sleep_position = (0, -1.85, 1.6, 0.12, 0.65, 0)
+    master_sleep_position = (0, -1.85, 1.6, 0, 0.0, 0)
+    PUPPET_GRIPPER_JOINT_OPEN = 0.0414
+    MASTER_GRIPPER_JOINT_OPEN = 0.7400
 
     # 创建线程
     threads = []
@@ -62,8 +62,8 @@ def shut_down_puppet_robots():
     puppet_bot_right = InterbotixManipulatorXS(robot_model="vx300s", group_name="arm", gripper_name="gripper",
                                                robot_name='puppet_right', init_node=False)
 
-    puppet_sleep_position = (0, -1.7, 1.55, 0.12, 0.65, 0)
-    PUPPET_GRIPPER_JOINT_OPEN = 1.4910
+    puppet_sleep_position = (0, -1.85, 1.6, 0.12, 0.65, 0)
+    PUPPET_GRIPPER_JOINT_OPEN = 0.0414
 
     # 创建线程
     threads = []
@@ -92,10 +92,10 @@ def sleep_all_robots():
     master_bot_right = InterbotixManipulatorXS(robot_model="wx250s", group_name="arm", gripper_name="gripper",
                                                robot_name='master_right', init_node=False)
 
-    puppet_sleep_position = (0, -1.7, 1.55, 0.12, 0.65, 0)
-    master_sleep_position = (0, -1.76, 1.55, 0, 0.0, 0)
-    PUPPET_GRIPPER_JOINT_OPEN = 1.4910
-    MASTER_GRIPPER_JOINT_OPEN = 0.02417
+    puppet_sleep_position = (0, -1.85, 1.6, 0.12, 0.65, 0)
+    master_sleep_position = (0, -1.85, 1.6, 0, 0.0, 0)
+    PUPPET_GRIPPER_JOINT_OPEN = 0.0414
+    MASTER_GRIPPER_JOINT_OPEN = 0.7409
 
     # 创建线程
     threads = []
@@ -123,8 +123,8 @@ def sleep_puppet_robots():
     puppet_bot_left = InterbotixManipulatorXS(robot_model="vx300s", group_name="arm", gripper_name="gripper", robot_name=f'puppet_left', init_node=False)
     puppet_bot_right = InterbotixManipulatorXS(robot_model="vx300s", group_name="arm", gripper_name="gripper", robot_name=f'puppet_right', init_node=False)
 
-    puppet_sleep_position = (0, -1.7, 1.55, 0.12, 0.65, 0)
-    PUPPET_GRIPPER_JOINT_OPEN = 1.4910
+    puppet_sleep_position = (0, -1.85, 1.6, 0.12, 0.65, 0)
+    PUPPET_GRIPPER_JOINT_OPEN = 0.0414
 
     threads = []
     threads.append(threading.Thread(target=move_robot,
@@ -151,9 +151,9 @@ def sleep_master_robots():
     master_bot_right = InterbotixManipulatorXS(robot_model="wx250s", group_name="arm", gripper_name="gripper",
                                                robot_name='master_right', init_node=False)
 
-    puppet_sleep_position = (0, -1.7, 1.55, 0.12, 0.65, 0)
-    master_sleep_position = (0, -1.76, 1.55, 0, 0.0, 0)
-    MASTER_GRIPPER_JOINT_OPEN = 0.02417
+    puppet_sleep_position = (0, -1.85, 1.6, 0.12, 0.65, 0)
+    master_sleep_position = (0, -1.85, 1.6, 0, 0.0, 0)
+    MASTER_GRIPPER_JOINT_OPEN = 0.7409
 
     # 创建线程
     threads = []

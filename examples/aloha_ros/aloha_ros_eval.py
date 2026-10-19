@@ -65,8 +65,8 @@ from constants import (
 # Evaluation configuration
 NUM_EPISODES = 5
 EPISODE_TIME_SEC = 30
-POLICY_PATH = "/home/robot/Dataset_and_Checkpoint/lerobot-checkpoint/testlerobot/checkpoints/015000/pretrained_model"
-DATASET_REPO_ID = "/home/robot/Dataset_and_Checkpoint/lerobot-dataset/testlerobot"  # For loading dataset stats
+POLICY_PATH = "/home/robot/Dataset_and_Checkpoint/lerobot-checkpoint/pi05_apple_grasping_theodore/pretrained_model"
+DATASET_REPO_ID = "/home/robot/Dataset_and_Checkpoint/lerobot-dataset/apple_grasping_pi05"  # For loading dataset stats
 
 # Policy configuration overrides (optional)
 # Set to None to use values from config.json, or set specific values to override
@@ -264,14 +264,32 @@ def eval_loop(
         
         
         print(f"Action: {act_final}")
-        input("Press Enter to continue...")
+        # === 安全的夹爪二值化 ===
+        THRESHOLD = 0.65 
+        
+        # 假设真实夹住苹果时的位置大约是 0.25
+        SAFE_CLOSE_POS = 0.22  # 留一点余量产生抓力，但不要设为 -0.05 这种极限值
+        SAFE_OPEN_POS = 0.85
+
+        if act_final['right_gripper.pos'] < THRESHOLD:
+            act_final['right_gripper.pos'] = SAFE_CLOSE_POS 
+        else:
+            act_final['right_gripper.pos'] = SAFE_OPEN_POS
+
+        # 如果用左手同理
+        if act_final['left_gripper.pos'] < THRESHOLD:
+            act_final['left_gripper.pos'] = SAFE_CLOSE_POS
+        else:
+            act_final['left_gripper.pos'] = SAFE_OPEN_POS
+        # =================================
+        # input("Press Enter to continue...")
         
         # Send action to robot
         robot.send_action(act_final)
         
-        # Log to rerun if enabled
-        if display_data:
-            log_rerun_data(obs_processed, act_final, timestamp)
+        # # Log to rerun if enabled
+        # if display_data:
+        #     log_rerun_data(obs_processed, act_final, timestamp)
         
         # Save video frames if enabled
         if save_video and video_writers is not None:
@@ -347,14 +365,14 @@ def main():
         policy_cfg.n_action_steps = POLICY_N_ACTION_STEPS
         print(f"Overriding n_action_steps: {POLICY_N_ACTION_STEPS}")
     
-    # Validate configuration after overrides
-    if policy_cfg.temporal_ensemble_coeff is not None and policy_cfg.n_action_steps > 1:
-        raise ValueError(
-            "`n_action_steps` must be 1 when using temporal ensembling. "
-            f"Current values: temporal_ensemble_coeff={policy_cfg.temporal_ensemble_coeff}, "
-            f"n_action_steps={policy_cfg.n_action_steps}. "
-            "Please set POLICY_N_ACTION_STEPS=1 if enabling temporal aggregation."
-        )
+    # # Validate configuration after overrides
+    # if policy_cfg.temporal_ensemble_coeff is not None and policy_cfg.n_action_steps > 1:
+    #     raise ValueError(
+    #         "`n_action_steps` must be 1 when using temporal ensembling. "
+    #         f"Current values: temporal_ensemble_coeff={policy_cfg.temporal_ensemble_coeff}, "
+    #         f"n_action_steps={policy_cfg.n_action_steps}. "
+    #         "Please set POLICY_N_ACTION_STEPS=1 if enabling temporal aggregation."
+    #     )
     
     # Make policy
     from lerobot.policies.factory import make_policy

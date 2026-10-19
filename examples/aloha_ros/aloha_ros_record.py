@@ -34,7 +34,8 @@ from typing import Any
 import numpy as np
 from tqdm import tqdm
 
-from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
+# from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
+from lerobot.cameras.realsense.configuration_realsense import RealSenseCameraConfig
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.datasets.utils import hw_to_dataset_features
 from lerobot.processor import make_default_processors
@@ -69,44 +70,45 @@ from constants import (
 
 
 # Recording configuration
-NUM_EPISODES = 2
-EPISODE_TIME_SEC = 20
+NUM_EPISODES = 50
+EPISODE_TIME_SEC = 15
 RESET_TIME_SEC = 5
-TASK_DESCRIPTION = "My task description"
-HF_REPO_ID = "guningquan2025/aloha_ros_record"
+TASK_DESCRIPTION = "Grasp an apple"
+HF_REPO_ID = "guningquan2025/apple_grasping"
+# HF_REPO_ID = "theodoreliu/apple_grasping"
 
 # Dataset root directory (optional)
 # If None, dataset will be saved to ~/.cache/huggingface/lerobot/{HF_REPO_ID}
 # You can specify a custom path like: DATASET_ROOT = "/path/to/your/dataset"
 
-DATASET_ROOT = '/home/robot/Dataset_and_Checkpoint/lerobot-dataset/testlerobot'  # Set to None for default location, or specify a Path/str
+DATASET_ROOT = '/home/robot/Dataset_and_Checkpoint/lerobot-dataset/apple_grasping'  # Set to None for default location, or specify a Path/str
 
 # Camera configuration (same as aloha_ros_teleop.py)
 camera_config = {
-    "cam_high": OpenCVCameraConfig(
-        index_or_path="/dev/CAM_HIGH", 
+    "cam_high": RealSenseCameraConfig(
+        serial_number_or_name="109422062625", 
+        fps=30,
         width=640, 
-        height=480, 
-        fps=FPS
+        height=480
     ),
-    "cam_right_wrist": OpenCVCameraConfig(
-        index_or_path="/dev/CAM_RIGHT_WRIST", 
+    "cam_right_wrist": RealSenseCameraConfig(
+        serial_number_or_name="943222070893", 
+        fps=30,
         width=640, 
-        height=480, 
-        fps=FPS
+        height=480
     ),
-    "cam_left_wrist": OpenCVCameraConfig(
-        index_or_path="/dev/CAM_LEFT_WRIST", 
+    "cam_left_wrist": RealSenseCameraConfig(
+        serial_number_or_name="134222077139", 
+        fps=30,
         width=640, 
-        height=480, 
-        fps=FPS
+        height=480
     ),
-    "cam_low": OpenCVCameraConfig(
-        index_or_path="/dev/CAM_LOW", 
+    "cam_low": RealSenseCameraConfig(
+        serial_number_or_name="936322072119", 
+        fps=30,
         width=640, 
-        height=480, 
-        fps=FPS
-    ),
+        height=480
+    )
 }
 
 
@@ -235,11 +237,19 @@ def press_to_start(master_left, master_right):
     master_left.bot.dxl.robot_torque_enable("single", "gripper", False)
     master_right.bot.dxl.robot_torque_enable("single", "gripper", False)
     print('Close both master grippers to start...')
-    close_thresh = -0.3
+    close_thresh = 0.1
     pressed_left = False
     pressed_right = False
     while not (pressed_left and pressed_right):
         t1 = time.perf_counter()
+
+        # 获取实时位置
+        gripper_pos_left = get_arm_gripper_positions(master_left)
+        gripper_pos_right = get_arm_gripper_positions(master_right)
+        
+        # 实时打印夹爪的读数 (重点加了这一行)
+        print(f"实时夹爪位置 - 左: {gripper_pos_left:.3f}, 右: {gripper_pos_right:.3f}", end='\r')
+
         if not pressed_left:
             gripper_pos_left = get_arm_gripper_positions(master_left)
             if gripper_pos_left < close_thresh:
