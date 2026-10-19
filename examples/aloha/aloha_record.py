@@ -15,17 +15,18 @@ The script will:
 
 from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
-from lerobot.datasets.utils import hw_to_dataset_features
-from lerobot.record import record_loop
+from lerobot.processor import make_default_processors
+from lerobot.scripts.lerobot_record import record_loop
+from lerobot.utils.feature_utils import hw_to_dataset_features
 from lerobot.robots.aloha import Aloha, AlohaConfig
 from lerobot.teleoperators.aloha_teleop import AlohaTeleop, AlohaTeleopConfig
-from lerobot.utils.control_utils import (
-    init_keyboard_listener,
+from lerobot.utils.keyboard_input import init_keyboard_listener
+from lerobot.common.control_utils import (
     sanity_check_dataset_name,
     sanity_check_dataset_robot_compatibility,
 )
 from lerobot.utils.utils import log_say
-from lerobot.utils.visualization_utils import _init_rerun
+from lerobot.utils.visualization_utils import init_rerun
 from lerobot.cameras.configs import ColorMode, Cv2Rotation
 
 # Recording configuration
@@ -112,7 +113,10 @@ else:
 
 # Initialize the keyboard listener and rerun visualization
 _, events = init_keyboard_listener()
-_init_rerun(session_name="aloha_recording")
+init_rerun(session_name="aloha_recording")
+
+# Default (identity) processors required by record_loop
+teleop_action_processor, robot_action_processor, robot_observation_processor = make_default_processors()
 
 # Connect the robot and teleoperator
 robot.connect()
@@ -135,6 +139,9 @@ while episode_idx < NUM_EPISODES and not events["stop_recording"]:
         control_time_s=EPISODE_TIME_SEC,
         single_task=TASK_DESCRIPTION,
         display_data=True,
+        teleop_action_processor=teleop_action_processor,
+        robot_action_processor=robot_action_processor,
+        robot_observation_processor=robot_observation_processor,
     )
 
     # Reset the environment if not stopping or re-recording
@@ -148,6 +155,9 @@ while episode_idx < NUM_EPISODES and not events["stop_recording"]:
             control_time_s=RESET_TIME_SEC,
             single_task=TASK_DESCRIPTION,
             display_data=True,
+            teleop_action_processor=teleop_action_processor,
+            robot_action_processor=robot_action_processor,
+            robot_observation_processor=robot_observation_processor,
         )
 
     if events["rerecord_episode"]:

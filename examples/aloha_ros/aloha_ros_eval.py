@@ -34,17 +34,19 @@ import cv2
 
 from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
-from lerobot.datasets.utils import hw_to_dataset_features
+from lerobot.utils.feature_utils import hw_to_dataset_features
 from lerobot.policies.factory import make_policy, make_pre_post_processors
 from lerobot.policies.pretrained import PreTrainedPolicy
 from lerobot.policies.utils import make_robot_action
 from lerobot.processor import make_default_processors
-from lerobot.processor.core import RobotAction, RobotObservation
+from lerobot.lerobot_types import RobotAction, RobotObservation
 from lerobot.processor.pipeline import RobotProcessorPipeline
 from lerobot.robots.aloha_ros import AlohaRos, AlohaRosConfig
 from lerobot.utils.constants import ACTION, OBS_STR
-from lerobot.utils.control_utils import init_keyboard_listener, predict_action
-from lerobot.utils.utils import get_safe_torch_device, log_say
+from lerobot.common.control_utils import predict_action
+from lerobot.utils.keyboard_input import init_keyboard_listener
+from lerobot.utils.device_utils import get_safe_torch_device
+from lerobot.utils.utils import log_say
 from lerobot.utils.visualization_utils import init_rerun, log_rerun_data
 from lerobot.utils.robot_utils import precise_sleep
 from lerobot.processor.converters import robot_action_observation_to_transition, transition_to_robot_action
@@ -235,7 +237,7 @@ def eval_loop(
         obs_processed = robot_observation_processor(obs)
         
         # Build observation frame for policy
-        from lerobot.datasets.utils import build_dataset_frame
+        from lerobot.utils.feature_utils import build_dataset_frame
         observation_frame = build_dataset_frame(
             {**hw_to_dataset_features(robot.observation_features, OBS_STR)},
             obs_processed,

@@ -37,15 +37,15 @@ from tqdm import tqdm
 # from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
 from lerobot.cameras.realsense.configuration_realsense import RealSenseCameraConfig
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
-from lerobot.datasets.utils import hw_to_dataset_features
+from lerobot.utils.feature_utils import hw_to_dataset_features
 from lerobot.processor import make_default_processors
-from lerobot.processor.core import RobotAction, RobotObservation
+from lerobot.lerobot_types import RobotAction, RobotObservation
 from lerobot.processor.pipeline import RobotActionProcessorStep, RobotProcessorPipeline
 from lerobot.robots.aloha_ros import AlohaRos, AlohaRosConfig
 from lerobot.scripts.lerobot_record import record_loop
 from lerobot.teleoperators.aloha_teleop_ros import AlohaTeleopRos, AlohaTeleopRosConfig
 from lerobot.utils.constants import ACTION, OBS_STR
-from lerobot.utils.control_utils import init_keyboard_listener
+from lerobot.utils.keyboard_input import init_keyboard_listener
 from lerobot.utils.utils import log_say
 from lerobot.utils.visualization_utils import init_rerun
 from lerobot.utils.robot_utils import precise_sleep
