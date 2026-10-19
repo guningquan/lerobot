@@ -13,18 +13,23 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from __future__ import annotations
 
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import numpy as np
-from reachy2_sdk import ReachySDK
-
-from lerobot.cameras.utils import make_cameras_from_configs
+from lerobot.cameras import make_cameras_from_configs
+from lerobot.lerobot_types import RobotAction, RobotObservation
+from lerobot.utils.import_utils import _reachy2_sdk_available, require_package
 
 from ..robot import Robot
 from ..utils import ensure_safe_goal_position
 from .configuration_reachy2 import Reachy2RobotConfig
+
+if TYPE_CHECKING or _reachy2_sdk_available:
+    from reachy2_sdk import ReachySDK
+else:
+    ReachySDK = None
 
 # {lerobot_keys: reachy2_sdk_keys}
 REACHY2_NECK_JOINTS = {
@@ -76,11 +81,18 @@ class Reachy2Robot(Robot):
     name = "reachy2"
 
     def __init__(self, config: Reachy2RobotConfig):
+        require_package("reachy2_sdk", extra="reachy2")
         super().__init__(config)
 
         self.config = config
         self.robot_type = self.config.type
         self.use_external_commands = self.config.use_external_commands
+        # Clipped commands currently return the original targets, not the applied ones.
+        self.supports_position_hold = (
+            not config.with_mobile_base
+            and not config.use_external_commands
+            and config.max_relative_target is None
+        )
 
         self.reachy: None | ReachySDK = None
         self.cameras = make_cameras_from_configs(config.cameras)
@@ -165,8 +177,8 @@ class Reachy2Robot(Robot):
         else:
             return {}
 
-    def get_observation(self) -> dict[str, np.ndarray]:
-        obs_dict: dict[str, Any] = {}
+    def get_observation(self) -> RobotObservation:
+        obs_dict: RobotObservation = {}
 
         # Read Reachy 2 state
         before_read_t = time.perf_counter()
@@ -175,11 +187,11 @@ class Reachy2Robot(Robot):
 
         # Capture images from cameras
         for cam_key, cam in self.cameras.items():
-            obs_dict[cam_key] = cam.async_read()
+            obs_dict[cam_key] = cam.read_latest()
 
         return obs_dict
 
-    def send_action(self, action: dict[str, Any]) -> dict[str, Any]:
+    def send_action(self, action: RobotAction) -> RobotAction:
         if self.reachy is not None:
             if not self.is_connected:
                 raise ConnectionError()

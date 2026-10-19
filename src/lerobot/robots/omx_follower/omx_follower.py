@@ -17,16 +17,11 @@
 import logging
 import time
 from functools import cached_property
-from typing import Any
 
-from lerobot.cameras.utils import make_cameras_from_configs
-from lerobot.motors import Motor, MotorCalibration, MotorNormMode
-from lerobot.motors.dynamixel import (
-    DriveMode,
-    DynamixelMotorsBus,
-    OperatingMode,
-)
-from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
+from lerobot.cameras import DepthCamera, make_cameras_from_configs
+from lerobot.lerobot_types import RobotAction, RobotObservation
+from lerobot.motors import DriveMode, Motor, MotorCalibration, MotorNormMode, SerialMotorsBus
+from lerobot.utils.decorators import check_if_already_connected, check_if_not_connected
 
 from ..robot import Robot
 from ..utils import ensure_safe_goal_position
@@ -43,12 +38,14 @@ class OmxFollower(Robot):
 
     config_class = OmxFollowerConfig
     name = "omx_follower"
+    # All commands, including the current-limited gripper, are position targets.
+    supports_position_hold = True
 
     def __init__(self, config: OmxFollowerConfig):
         super().__init__(config)
         self.config = config
         norm_mode_body = MotorNormMode.DEGREES if config.use_degrees else MotorNormMode.RANGE_M100_100
-        self.bus = DynamixelMotorsBus(
+        self.bus = SerialMotorsBus(
             port=self.config.port,
             motors={
                 "shoulder_pan": Motor(11, "xl430-w250", norm_mode_body),
@@ -68,9 +65,14 @@ class OmxFollower(Robot):
 
     @property
     def _cameras_ft(self) -> dict[str, tuple]:
-        return {
-            cam: (self.config.cameras[cam].height, self.config.cameras[cam].width, 3) for cam in self.cameras
-        }
+        features: dict[str, tuple] = {}
+        for cam in self.cameras:
+            cfg = self.config.cameras[cam]
+            if getattr(cfg, "use_rgb", True):
+                features[cam] = (cfg.height, cfg.width, 3)
+            if getattr(cfg, "use_depth", False):
+                features[f"{cam}_depth"] = (cfg.height, cfg.width, 1)
+        return features
 
     @cached_property
     def observation_features(self) -> dict[str, type | tuple]:
@@ -84,6 +86,7 @@ class OmxFollower(Robot):
     def is_connected(self) -> bool:
         return self.bus.is_connected and all(cam.is_connected for cam in self.cameras.values())
 
+    @check_if_already_connected
     def connect(self, calibrate: bool = True) -> None:
         """
         For OMX robots that come pre-calibrated:
@@ -91,8 +94,6 @@ class OmxFollower(Robot):
         - This allows using pre-calibrated robots without manual calibration
         - If no calibration file exists, use factory default values (homing_offset=0, range_min=0, range_max=4095)
         """
-        if self.is_connected:
-            raise DeviceAlreadyConnectedError(f"{self} already connected")
 
         self.bus.connect()
         if not self.is_calibrated and calibrate:
@@ -115,8 +116,7 @@ class OmxFollower(Robot):
         self.bus.disable_torque()
         logger.info(f"\nUsing factory default calibration values for {self}")
         logger.info(f"\nWriting default configuration of {self} to the motors")
-        for motor in self.bus.motors:
-            self.bus.write("Operating_Mode", motor, OperatingMode.EXTENDED_POSITION.value)
+        self.bus.set_operating_mode("extended_position")
 
         for motor in self.bus.motors:
             self.bus.write("Drive_Mode", motor, DriveMode.NON_INVERTED.value)
@@ -143,7 +143,7 @@ class OmxFollower(Robot):
             # the arm, you could end up with a servo with a position 0 or 4095 at a crucial point
             for motor in self.bus.motors:
                 if motor != "gripper":
-                    self.bus.write("Operating_Mode", motor, OperatingMode.EXTENDED_POSITION.value)
+                    self.bus.set_operating_mode("extended_position", motor)
 
             # Use 'position control current based' for gripper to be limited by the limit of the current. For
             # the follower gripper, it means it can grasp an object without forcing too much even tho, its
@@ -151,7 +151,7 @@ class OmxFollower(Robot):
             # For the leader gripper, it means we can use it as a physical trigger, since we can force with
             # our finger to make it move, and it will move back to its original target position when we
             # release the force.
-            self.bus.write("Operating_Mode", "gripper", OperatingMode.CURRENT_POSITION.value)
+            self.bus.set_operating_mode("current_based_position", "gripper")
 
             # Set better PID values to close the gap between recorded states and actions
             # TODO(rcadene): Implement an automatic procedure to set optimal PID values for each motor
@@ -165,10 +165,8 @@ class OmxFollower(Robot):
             self.bus.setup_motor(motor)
             print(f"'{motor}' motor id set to {self.bus.motors[motor].id}")
 
-    def get_observation(self) -> dict[str, Any]:
-        if not self.is_connected:
-            raise DeviceNotConnectedError(f"{self} is not connected.")
-
+    @check_if_not_connected
+    def get_observation(self) -> RobotObservation:
         # Read arm position
         start = time.perf_counter()
         obs_dict = self.bus.sync_read("Present_Position")
@@ -178,14 +176,22 @@ class OmxFollower(Robot):
 
         # Capture images from cameras
         for cam_key, cam in self.cameras.items():
-            start = time.perf_counter()
-            obs_dict[cam_key] = cam.async_read()
-            dt_ms = (time.perf_counter() - start) * 1e3
-            logger.debug(f"{self} read {cam_key}: {dt_ms:.1f}ms")
+            if getattr(cam, "use_rgb", True):
+                start = time.perf_counter()
+                obs_dict[cam_key] = cam.read_latest()
+                dt_ms = (time.perf_counter() - start) * 1e3
+                logger.debug(f"{self} read {cam_key}: {dt_ms:.1f}ms")
+
+            if isinstance(cam, DepthCamera) and cam.use_depth:
+                start = time.perf_counter()
+                obs_dict[f"{cam_key}_depth"] = cam.read_latest_depth()
+                dt_ms = (time.perf_counter() - start) * 1e3
+                logger.debug(f"{self} read {cam_key} depth: {dt_ms:.1f}ms")
 
         return obs_dict
 
-    def send_action(self, action: dict[str, float]) -> dict[str, float]:
+    @check_if_not_connected
+    def send_action(self, action: RobotAction) -> RobotAction:
         """Command arm to move to a target joint configuration.
 
         The relative action magnitude may be clipped depending on the configuration parameter
@@ -193,13 +199,11 @@ class OmxFollower(Robot):
         Thus, this function always returns the action actually sent.
 
         Args:
-            action (dict[str, float]): The goal positions for the motors.
+            action (RobotAction): The goal positions for the motors.
 
         Returns:
-            dict[str, float]: The action sent to the motors, potentially clipped.
+            RobotAction: The action sent to the motors, potentially clipped.
         """
-        if not self.is_connected:
-            raise DeviceNotConnectedError(f"{self} is not connected.")
 
         goal_pos = {key.removesuffix(".pos"): val for key, val in action.items() if key.endswith(".pos")}
 
@@ -214,10 +218,8 @@ class OmxFollower(Robot):
         self.bus.sync_write("Goal_Position", goal_pos)
         return {f"{motor}.pos": val for motor, val in goal_pos.items()}
 
+    @check_if_not_connected
     def disconnect(self):
-        if not self.is_connected:
-            raise DeviceNotConnectedError(f"{self} is not connected.")
-
         self.bus.disconnect(self.config.disable_torque_on_disconnect)
         for cam in self.cameras.values():
             cam.disconnect()

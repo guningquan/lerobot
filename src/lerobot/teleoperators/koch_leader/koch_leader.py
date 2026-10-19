@@ -17,13 +17,8 @@
 import logging
 import time
 
-from lerobot.motors import Motor, MotorCalibration, MotorNormMode
-from lerobot.motors.dynamixel import (
-    DriveMode,
-    DynamixelMotorsBus,
-    OperatingMode,
-)
-from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
+from lerobot.motors import DriveMode, Motor, MotorCalibration, MotorNormMode, SerialMotorsBus
+from lerobot.utils.decorators import check_if_already_connected, check_if_not_connected
 
 from ..teleoperator import Teleoperator
 from .config_koch_leader import KochLeaderConfig
@@ -44,7 +39,7 @@ class KochLeader(Teleoperator):
     def __init__(self, config: KochLeaderConfig):
         super().__init__(config)
         self.config = config
-        self.bus = DynamixelMotorsBus(
+        self.bus = SerialMotorsBus(
             port=self.config.port,
             motors={
                 "shoulder_pan": Motor(1, "xl330-m077", MotorNormMode.RANGE_M100_100),
@@ -69,10 +64,8 @@ class KochLeader(Teleoperator):
     def is_connected(self) -> bool:
         return self.bus.is_connected
 
+    @check_if_already_connected
     def connect(self, calibrate: bool = True) -> None:
-        if self.is_connected:
-            raise DeviceAlreadyConnectedError(f"{self} already connected")
-
         self.bus.connect()
         if not self.is_calibrated and calibrate:
             logger.info(
@@ -99,8 +92,7 @@ class KochLeader(Teleoperator):
                 self.bus.write_calibration(self.calibration)
                 return
         logger.info(f"\nRunning calibration of {self}")
-        for motor in self.bus.motors:
-            self.bus.write("Operating_Mode", motor, OperatingMode.EXTENDED_POSITION.value)
+        self.bus.set_operating_mode("extended_position")
 
         self.bus.write("Drive_Mode", "elbow_flex", DriveMode.INVERTED.value)
         drive_modes = {motor: 1 if motor == "elbow_flex" else 0 for motor in self.bus.motors}
@@ -119,14 +111,14 @@ class KochLeader(Teleoperator):
             range_mins[motor] = 0
             range_maxes[motor] = 4095
 
-        self.calibration = {}
+        self.calibration: dict[str, MotorCalibration] = {}
         for motor, m in self.bus.motors.items():
             self.calibration[motor] = MotorCalibration(
                 id=m.id,
                 drive_mode=drive_modes[motor],
-                homing_offset=homing_offsets[motor],
-                range_min=range_mins[motor],
-                range_max=range_maxes[motor],
+                homing_offset=int(homing_offsets[motor]),
+                range_min=int(range_mins[motor]),
+                range_max=int(range_maxes[motor]),
             )
 
         self.bus.write_calibration(self.calibration)
@@ -142,14 +134,14 @@ class KochLeader(Teleoperator):
                 # can't rotate more than 360 degrees (from 0 to 4095) And some mistake can happen while
                 # assembling the arm, you could end up with a servo with a position 0 or 4095 at a crucial
                 # point
-                self.bus.write("Operating_Mode", motor, OperatingMode.EXTENDED_POSITION.value)
+                self.bus.set_operating_mode("extended_position", motor)
 
         # Use 'position control current based' for gripper to be limited by the limit of the current.
         # For the follower gripper, it means it can grasp an object without forcing too much even tho,
         # its goal position is a complete grasp (both gripper fingers are ordered to join and reach a touch).
         # For the leader gripper, it means we can use it as a physical trigger, since we can force with our finger
         # to make it move, and it will move back to its original target position when we release the force.
-        self.bus.write("Operating_Mode", "gripper", OperatingMode.CURRENT_POSITION.value)
+        self.bus.set_operating_mode("current_based_position", "gripper")
         # Set gripper's goal pos in current position mode so that we can use it as a trigger.
         self.bus.enable_torque("gripper")
         if self.is_calibrated:
@@ -161,10 +153,8 @@ class KochLeader(Teleoperator):
             self.bus.setup_motor(motor)
             print(f"'{motor}' motor id set to {self.bus.motors[motor].id}")
 
+    @check_if_not_connected
     def get_action(self) -> dict[str, float]:
-        if not self.is_connected:
-            raise DeviceNotConnectedError(f"{self} is not connected.")
-
         start = time.perf_counter()
         action = self.bus.sync_read("Present_Position")
         action = {f"{motor}.pos": val for motor, val in action.items()}
@@ -176,9 +166,7 @@ class KochLeader(Teleoperator):
         # TODO(rcadene, aliberts): Implement force feedback
         raise NotImplementedError
 
+    @check_if_not_connected
     def disconnect(self) -> None:
-        if not self.is_connected:
-            raise DeviceNotConnectedError(f"{self} is not connected.")
-
         self.bus.disconnect()
         logger.info(f"{self} disconnected.")
