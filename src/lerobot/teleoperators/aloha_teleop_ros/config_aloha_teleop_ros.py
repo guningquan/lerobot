@@ -23,10 +23,19 @@ class AlohaTeleopRosConfig(TeleoperatorConfig):
     # ROS robot names for master arms
     left_arm_robot_name: str = "master_left"
     right_arm_robot_name: str = "master_right"
-    
+
     # Robot model type
     robot_model: str = "wx250s"
-    
+
     # ROS node initialization (only first arm initializes node)
     init_ros_node: bool = True
 
+    # Control loop rate in Hz (e.g. 30 or 50), see WidowXRosConfig.fps.
+    fps: int = 30
+
+    # Move both arms to START_ARM_POSE on connect.
+    move_to_start_on_connect: bool = True
+    # Gripper opening in move_to_start(): 0.0 = closed, 1.0 = open.
+    start_open_ratio: float = 1.0
+    # Cut the torque at the end of connect() (see WidowXRosConfig.release_on_connect).
+    release_on_connect: bool = True

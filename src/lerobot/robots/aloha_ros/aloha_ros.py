@@ -15,6 +15,8 @@
 # limitations under the License.
 
 import logging
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from functools import cached_property
 from typing import Any
 
@@ -22,9 +24,9 @@ from lerobot.cameras.utils import make_cameras_from_configs
 from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
 
 from ..robot import Robot
-from .config_aloha_ros import AlohaRosConfig
 from ..viperx_ros.config_viperx_ros import ViperXRosConfig
 from ..viperx_ros.viperx_ros import ViperXRos
+from .config_aloha_ros import AlohaRosConfig
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +35,9 @@ class AlohaRos(Robot):
     """
     ALOHA Robot using ROS InterbotixManipulatorXS for control.
     Uses lerobot camera system for image capture.
-    Combines two ViperXRos robots (left and right puppet arms).
+    Combines two ViperXRos robots (left and right puppet arms); see ViperXRos for how each arm is
+    driven and what `gripper.pos` means. Moves that involve both arms (start pose, sleep, shutdown)
+    run on both arms at the same time.
     """
 
     config_class = AlohaRosConfig
@@ -43,26 +47,30 @@ class AlohaRos(Robot):
         super().__init__(config)
         self.config = config
 
-        # Create left arm config
-        left_arm_config = ViperXRosConfig(
-            id=f"{config.id}_left" if config.id else None,
-            robot_name=config.puppet_left_robot_name,
-            robot_model=config.robot_model,
-            init_ros_node=config.init_ros_node,
-            cameras={},  # Cameras are handled at AlohaRos level
-        )
+        def arm_config(side: str, robot_name: str, init_ros_node: bool) -> ViperXRosConfig:
+            return ViperXRosConfig(
+                id=f"{config.id}_{side}" if config.id else None,
+                robot_name=robot_name,
+                robot_model=config.robot_model,
+                init_ros_node=init_ros_node,
+                side=side,
+                fps=config.fps,
+                move_to_start_on_connect=False,  # both arms move together in move_to_start()
+                start_open_ratio=config.start_open_ratio,
+                start_blend_s=config.start_blend_s,
+                gripper_contact_guard=config.gripper_contact_guard,
+                gripper_stall_error=config.gripper_stall_error,
+                gripper_stall_motion=config.gripper_stall_motion,
+                gripper_stall_cycles=config.gripper_stall_cycles,
+                gripper_release_margin=config.gripper_release_margin,
+                gripper_effort_threshold=config.gripper_effort_threshold,
+                gripper_current_limit=config.gripper_current_limit,
+                cameras={},  # Cameras are handled at AlohaRos level
+            )
 
-        # Create right arm config
-        right_arm_config = ViperXRosConfig(
-            id=f"{config.id}_right" if config.id else None,
-            robot_name=config.puppet_right_robot_name,
-            robot_model=config.robot_model,
-            init_ros_node=False,  # Only initialize node once
-            cameras={},  # Cameras are handled at AlohaRos level
-        )
-
-        self.left_arm = ViperXRos(left_arm_config)
-        self.right_arm = ViperXRos(right_arm_config)
+        self.left_arm = ViperXRos(arm_config("left", config.puppet_left_robot_name, config.init_ros_node))
+        # Only initialize node once
+        self.right_arm = ViperXRos(arm_config("right", config.puppet_right_robot_name, False))
 
         # Setup cameras if provided (shared between both arms)
         if config.cameras:
@@ -70,25 +78,25 @@ class AlohaRos(Robot):
         else:
             self.cameras = {}
 
+    def _on_both_arms(self, fn: Callable[[ViperXRos], None]) -> None:
+        """Run `fn` on the left and the right arm at the same time; re-raises the first error."""
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            list(executor.map(fn, (self.left_arm, self.right_arm)))
+
     @property
     def _motors_ft(self) -> dict[str, type]:
         """Motor features for both arms."""
-        motor_names = [
-            "waist", "shoulder", "elbow", "forearm_roll", 
-            "wrist_angle", "wrist_rotate", "gripper"
-        ]
-        features = {}
-        for side in ["left", "right"]:
-            for motor in motor_names:
-                features[f"{side}_{motor}.pos"] = float
-        return features
+        return {
+            f"{side}_{key}": float
+            for side, arm in (("left", self.left_arm), ("right", self.right_arm))
+            for key in arm.action_features
+        }
 
     @property
     def _cameras_ft(self) -> dict[str, tuple]:
         """Camera features."""
         return {
-            cam: (self.config.cameras[cam].height, self.config.cameras[cam].width, 3)
-            for cam in self.cameras
+            cam: (self.config.cameras[cam].height, self.config.cameras[cam].width, 3) for cam in self.cameras
         }
 
     @cached_property
@@ -112,7 +120,7 @@ class AlohaRos(Robot):
         if self.is_connected:
             raise DeviceAlreadyConnectedError(f"{self} already connected")
 
-        # Connect arms
+        # Connect arms (motor setup, see ViperXRos.configure)
         self.left_arm.connect(calibrate)
         self.right_arm.connect(calibrate)
 
@@ -120,7 +128,8 @@ class AlohaRos(Robot):
         for cam in self.cameras.values():
             cam.connect()
 
-        self.configure()
+        if self.config.move_to_start_on_connect:
+            self.move_to_start()
         logger.info(f"{self} connected.")
 
     @property
@@ -134,32 +143,37 @@ class AlohaRos(Robot):
         self.right_arm.calibrate()
 
     def configure(self) -> None:
-        """Apply configuration to robots."""
+        """Re-apply the motor setup of both arms (connect() already does this once)."""
         self.left_arm.configure()
         self.right_arm.configure()
+
+    def move_to_start(self, start_open_ratio: float | None = None) -> None:
+        """Move both arms to START_ARM_POSE and park the grippers (see ViperXRos.move_to_start)."""
+        self._on_both_arms(lambda arm: arm.move_to_start(start_open_ratio))
+
+    def begin_blend(self, duration_s: float | None = None) -> None:
+        """Ease both arms onto the next commands (see ViperXRos.begin_blend)."""
+        self.left_arm.begin_blend(duration_s)
+        self.right_arm.begin_blend(duration_s)
+
+    def sleep(self) -> None:
+        """Both arms to the rest pose, torque kept on (see ViperXRos.sleep)."""
+        self._on_both_arms(lambda arm: arm.sleep())
+
+    def shutdown(self) -> None:
+        """Both arms to the rest pose, then torque off (see ViperXRos.shutdown)."""
+        self._on_both_arms(lambda arm: arm.shutdown())
 
     def get_observation(self) -> dict[str, Any]:
         """Get observations from both robots and cameras."""
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
 
-        obs_dict = {}
-
-        # Get observations from left arm (without cameras)
-        left_obs = self.left_arm.get_observation()
-        for key, value in left_obs.items():
-            if not isinstance(value, (list, tuple)) or (isinstance(value, tuple) and len(value) == 3):
-                # Skip camera images, add "left_" prefix to motor observations
-                if key.endswith(".pos"):
-                    obs_dict[f"left_{key}"] = value
-
-        # Get observations from right arm (without cameras)
-        right_obs = self.right_arm.get_observation()
-        for key, value in right_obs.items():
-            if not isinstance(value, (list, tuple)) or (isinstance(value, tuple) and len(value) == 3):
-                # Skip camera images, add "right_" prefix to motor observations
-                if key.endswith(".pos"):
-                    obs_dict[f"right_{key}"] = value
+        obs_dict: dict[str, Any] = {}
+        for side, arm in (("left", self.left_arm), ("right", self.right_arm)):
+            # The arms have no cameras of their own, so these are all "<motor>.pos" values
+            for key, value in arm.get_observation().items():
+                obs_dict[f"{side}_{key}"] = value
 
         # Capture images from cameras (shared cameras)
         for cam_key, cam in self.cameras.items():
@@ -169,44 +183,40 @@ class AlohaRos(Robot):
 
     def send_action(self, action: dict[str, float]) -> dict[str, float]:
         """Send actions to both robots.
-        
+
         Args:
-            action: Dictionary with keys like "left_waist.pos", "right_gripper.pos", etc.
-        
+            action: Dictionary with keys like "left_waist.pos", "right_gripper.pos", etc. Joints are
+                in rad; "*_gripper.pos" is the gripper opening in [0, 1].
+
         Returns:
             Dictionary of actions actually sent.
         """
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
 
-        # Extract left arm actions
-        left_action = {
-            key.removeprefix("left_"): value 
-            for key, value in action.items() 
-            if key.startswith("left_")
-        }
-
-        # Extract right arm actions
-        right_action = {
-            key.removeprefix("right_"): value 
-            for key, value in action.items() 
-            if key.startswith("right_")
-        }
-
-        # Send actions to both arms
-        if left_action:
-            self.left_arm.send_action(left_action)
-        if right_action:
-            self.right_arm.send_action(right_action)
-
-        return action
+        sent: dict[str, float] = {}
+        for side, arm in (("left", self.left_arm), ("right", self.right_arm)):
+            arm_action = {
+                key.removeprefix(f"{side}_"): value
+                for key, value in action.items()
+                if key.startswith(f"{side}_")
+            }
+            if arm_action:
+                sent.update({f"{side}_{key}": value for key, value in arm.send_action(arm_action).items()})
+        return sent
 
     def disconnect(self) -> None:
-        """Disconnect from robots and cameras."""
+        """Walk both arms to the rest pose and power them off (unless shutdown() already did), then
+        disconnect robots and cameras."""
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
 
-        # Disconnect arms
+        try:
+            self._on_both_arms(lambda arm: None if arm.is_powered_down else arm.shutdown())
+        except Exception as e:
+            logger.warning(f"Error during shutdown sequence: {e}. Continuing with disconnect...")
+
+        # Disconnect arms (no further motion once powered down)
         self.left_arm.disconnect()
         self.right_arm.disconnect()
 

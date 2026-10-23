@@ -13,580 +13,6 @@ else:
 
 TASK_CONFIGS = {
 
-    'velcro_taping_act_3cams': {
-        'dataset_dir': DATA_DIR + '/velcro_taping',
-        'num_episodes': 50,
-        'episode_len': 1000,
-        'camera_names': ['cam_high',
-                         # 'cam_low',
-                         'cam_left_wrist',
-                         'cam_right_wrist']
-    },
-    'velcro_taping_3cams': {
-        'dataset_dir': DATA_DIR + '/velcro_taping',
-        'num_episodes': 50,
-        'episode_len': 1000,
-        'camera_names': ['cam_high',
-                         # 'cam_low',
-                         'cam_left_wrist',
-                         'cam_right_wrist',
-                         'gel']
-    },
-
-    'zip_tie_cotrain':{
-            'dataset_dir': [
-                DATA_DIR + '/zip_tie',
-                # DATA_DIR + '/mobile_aloha/aloha_mobile_wash_pan',
-                DATA_DIR + '/mobile_aloha/aloha_static_cotraining_datasets',
-                # DATA_DIR + '/velcro_taping',
-            ], # only the first dataset_dir is used for val
-            'stats_dir': [
-                DATA_DIR + '/zip_tie',
-            ],
-            'sample_weights': [7.5, 2.5],
-            'train_ratio': 0.9, # ratio of train data from the first dataset_dir
-            'episode_len': 1100,
-            'camera_names': ['cam_high',
-                         # 'cam_low',
-                         'cam_left_wrist',
-                         'cam_right_wrist',
-                         'gel'
-                         ]
-        },
-
-    'pre-train-3camera': {
-        'dataset_dir': [
-            DATA_DIR + '/mobile_aloha/aloha_static_cotraining_datasets',
-        ],
-        'train_ratio': 0.95,
-        'episode_len': 1000,
-        'camera_names': ['cam_high',
-                         # 'cam_low',
-                         'cam_left_wrist',
-                         'cam_right_wrist',
-                         ]
-    },
-
-    'pre-train-4camera': {
-        'dataset_dir': [
-            DATA_DIR + '/mobile_aloha/aloha_static_cotraining_datasets',
-        ],
-        'train_ratio': 0.95,
-        'episode_len': 1000,
-        'camera_names': ['cam_high',
-                         'cam_low',
-                         'cam_left_wrist',
-                         'cam_right_wrist',
-                         ]
-    },
-
-    'zip_tie_data_collection': {
-        'dataset_dir': DATA_DIR + '/zip_tie',
-        'episode_len': 900,
-        'camera_names': ['cam_high',
-                         'cam_low',
-                         'cam_left_wrist',
-                         'cam_right_wrist',
-                         'gel'
-                         ]
-    },
-    'zip_tie_gel_unet': {
-        'dataset_dir': DATA_DIR + '/zip_tie',
-        'episode_len': 900,
-        'camera_names': ['cam_high',
-                         # 'cam_low',
-                         'cam_left_wrist',
-                         'cam_right_wrist',
-                         'gel'
-                         ]
-    },
-
-    'zip_tie_gel_resnet': {
-        'dataset_dir': DATA_DIR + '/zip_tie',
-        'episode_len': 900,
-        'camera_names': ['cam_high',
-                         # 'cam_low',
-                         'cam_left_wrist',
-                         'cam_right_wrist',
-                         'gel'
-                         ]
-    },
-
-    'zip_tie_gel_act': {
-        'dataset_dir': DATA_DIR + '/zip_tie',
-        'episode_len': 900,
-        'camera_names': ['cam_high',
-                         # 'cam_low',
-                         'cam_left_wrist',
-                         'cam_right_wrist',
-                         'gel'
-                         ]
-    },
-    'zip_tie_act': {
-        'dataset_dir': DATA_DIR + '/zip_tie',
-        'episode_len': 900,
-        'camera_names': ['cam_high',
-                         # 'cam_low',
-                         'cam_left_wrist',
-                         'cam_right_wrist',
-                         # 'gel'
-                         ]
-    },
-    'zip_tie_gel_cbam': {
-        'dataset_dir': DATA_DIR + '/zip_tie',
-        'episode_len': 900,
-        'camera_names': ['cam_high',
-                         # 'cam_low',
-                         'cam_left_wrist',
-                         'cam_right_wrist',
-                         'gel'
-                         ]
-    },
-
-    'velcro_taping_data_collection': {
-        'dataset_dir': DATA_DIR + '/velcro_taping',
-        'episode_len': 1100,
-        'camera_names': ['cam_high', 'cam_low', 'cam_left_wrist', 'cam_right_wrist', 'gel']
-    },
-
-    'velcro_taping_data_collection_test': {
-        'dataset_dir': DATA_DIR + '/velcro_taping_test',
-        'episode_len': 1000,
-        'camera_names': ['cam_high', 'cam_left_wrist', 'cam_right_wrist', 'cam_low']
-    },
-
-    'velcro_taping_gel_act': {
-        'dataset_dir': DATA_DIR + '/velcro_taping',
-        'episode_len': 1100,
-        'camera_names': ['cam_high',
-                         # 'cam_low',
-                         'cam_left_wrist',
-                         'cam_right_wrist',
-                         'gel'
-                         ]
-    },
-    'velcro_taping_act': {
-        'dataset_dir': DATA_DIR + '/velcro_taping',
-        'episode_len': 1100,
-        'camera_names': ['cam_high',
-                         # 'cam_low',
-                         'cam_left_wrist',
-                         'cam_right_wrist',
-                         # 'gel'
-                         ]
-    },
-    'velcro_taping_gel_tactile_resnet': {
-        'dataset_dir': DATA_DIR + '/velcro_taping',
-        'episode_len': 1100,
-        'camera_names': ['cam_high',
-                         # 'cam_low',
-                         'cam_left_wrist',
-                         'cam_right_wrist',
-                         'gel'
-                         ]
-    },
-    'velcro_taping_gel_tactile_unet': {
-        'dataset_dir': DATA_DIR + '/velcro_taping',
-        'episode_len': 1100,
-        'camera_names': ['cam_high',
-                         # 'cam_low',
-                         'cam_left_wrist',
-                         'cam_right_wrist',
-                         'gel'
-                         ]
-    },
-    'velcro_taping_gel_tactile_cbam': {
-        'dataset_dir': DATA_DIR + '/velcro_taping',
-        'episode_len': 1100,
-        'camera_names': ['cam_high',
-                         # 'cam_low',
-                         'cam_left_wrist',
-                         'cam_right_wrist',
-                         'gel'
-                         ]
-    },
-    'zip_tie_gel_act_front': {
-        'dataset_dir': DATA_DIR + '/zip_tie/front',
-        'episode_len': 900,
-        'camera_names': ['cam_high',
-                         # 'cam_low',
-                         'cam_left_wrist',
-                         'cam_right_wrist',
-                         'gel'
-                         ]
-    },
-    'zip_tie_gel_tactile_resnet_front': {
-        'dataset_dir': DATA_DIR + '/zip_tie/front',
-        'episode_len': 900,
-        'camera_names': ['cam_high',
-                         # 'cam_low',
-                         'cam_left_wrist',
-                         'cam_right_wrist',
-                         'gel'
-                         ]
-    },
-    'zip_tie_gel_tactile_unet_front': {
-        'dataset_dir': DATA_DIR + '/zip_tie/front',
-        'episode_len': 900,
-        'camera_names': ['cam_high',
-                         # 'cam_low',
-                         'cam_left_wrist',
-                         'cam_right_wrist',
-                         'gel'
-                         ]
-    },
-    'velcro_taping_gel_act_cotrain':{
-            'dataset_dir': [
-                DATA_DIR + '/velcro_taping',
-                # DATA_DIR + '/mobile_aloha/aloha_mobile_wash_pan',
-                DATA_DIR + '/mobile_aloha',
-                # DATA_DIR + '/velcro_taping',
-            ], # only the first dataset_dir is used for val
-            'stats_dir': [
-                DATA_DIR + '/velcro_taping',
-            ],
-            'sample_weights': [7.5, 2.5],
-            'train_ratio': 0.9, # ratio of train data from the first dataset_dir
-            'episode_len': 1100,
-            'camera_names': ['cam_high',
-                         # 'cam_low',
-                         'cam_left_wrist',
-                         'cam_right_wrist',
-                         'gel'
-                         ]
-    },
-
-    'zip_tie_random_data_collection': {
-        'dataset_dir': DATA_DIR + '/zip_tie_random',
-        'episode_len': 900,
-        'camera_names': ['cam_high',
-                        # 'cam_low',
-                         'cam_left_wrist',
-                         'cam_right_wrist',
-                         'gel'
-                         ]
-    },
-
-    'zip_tie_random_act_notactile': {
-        'dataset_dir': DATA_DIR + '/zip_tie_random',
-        'episode_len': 900,
-        'camera_names': ['cam_high',
-                         # 'cam_low',
-                         'cam_left_wrist',
-                         'cam_right_wrist',
-                         # 'gel'
-                         ]
-    },
-    'zip_tie_random_act_tactile': {
-        'dataset_dir': DATA_DIR + '/zip_tie_random',
-        'episode_len': 900,
-        'camera_names': ['cam_high',
-                         # 'cam_low',
-                         'cam_left_wrist',
-                         'cam_right_wrist',
-                         'gel'
-                         ]
-    },
-
-    'zip_tie_random_unet_cotrain': {  # include loss
-        'dataset_dir': [
-            DATA_DIR + '/zip_tie_random',
-            # DATA_DIR + '/mobile_aloha/aloha_mobile_wash_pan',
-            DATA_DIR + '/mobile_aloha',
-            # DATA_DIR + '/velcro_taping',
-        ],  # only the first dataset_dir is used for val
-        'stats_dir': [
-            DATA_DIR + '/zip_tie_random',
-        ],
-        'sample_weights': [7.5, 2.5],
-        'train_ratio': 0.95,  # ratio of train data from the first dataset_dir
-        'episode_len': 900,
-        'camera_names': ['cam_high',
-                         # 'cam_low',
-                         'cam_left_wrist',
-                         'cam_right_wrist',
-                         'gel'
-                         ]
-    },
-
-    'zip_tie_random_diffusion_notactile': {
-        'dataset_dir': DATA_DIR + '/zip_tie_random',
-        'episode_len': 900,
-        'camera_names': ['cam_high',
-                         # 'cam_low',
-                         'cam_left_wrist',
-                         'cam_right_wrist',
-                         # 'gel'
-                         ]
-    },
-
-
-    'zip_tie_random_unet_cotrain_noloss': {
-            'dataset_dir': [
-                DATA_DIR + '/zip_tie_random',
-                # DATA_DIR + '/mobile_aloha/aloha_mobile_wash_pan',
-                DATA_DIR + '/mobile_aloha',
-                # DATA_DIR + '/velcro_taping',
-            ],  # only the first dataset_dir is used for val
-            'stats_dir': [
-                DATA_DIR + '/zip_tie_random',
-            ],
-            'sample_weights': [7.5, 2.5],
-            'train_ratio': 0.95,  # ratio of train data from the first dataset_dir
-            'episode_len': 900,
-            'camera_names': ['cam_high',
-                             # 'cam_low',
-                             'cam_left_wrist',
-                             'cam_right_wrist',
-                             'gel'
-                             ]
-        },
-
-
-    'zip_tie_random_act_cotrain': {
-        'dataset_dir': [
-            DATA_DIR + '/zip_tie_random',
-            # DATA_DIR + '/mobile_aloha/aloha_mobile_wash_pan',
-            DATA_DIR + '/mobile_aloha',
-            # DATA_DIR + '/velcro_taping',
-        ],  # only the first dataset_dir is used for val
-        'stats_dir': [
-            DATA_DIR + '/zip_tie_random',
-        ],
-        'sample_weights': [7.5, 2.5],
-        'train_ratio': 0.95,  # ratio of train data from the first dataset_dir
-        'episode_len': 900,
-        'camera_names': ['cam_high',
-                         # 'cam_low',
-                         'cam_left_wrist',
-                         'cam_right_wrist',
-                         'gel'
-                         ]
-    },
-
-    'zip_tie_random_resnet_loss': {
-        'dataset_dir': DATA_DIR + '/zip_tie_random',
-        'episode_len': 900,
-        'camera_names': ['cam_high',
-                         # 'cam_low',
-                         'cam_left_wrist',
-                         'cam_right_wrist',
-                         'gel'
-                         ]
-    },
-
-    'zip_tie_random_unet_loss': {
-        'dataset_dir': DATA_DIR + '/zip_tie_random',
-        'episode_len': 900,
-        'camera_names': ['cam_high',
-                         # 'cam_low',
-                         'cam_left_wrist',
-                         'cam_right_wrist',
-                         'gel'
-                         ]
-    },
-
-    'zip_tie_random_resnet_cotrain_loss': {
-        'dataset_dir': [
-            DATA_DIR + '/zip_tie_random',
-            # DATA_DIR + '/mobile_aloha/aloha_mobile_wash_pan',
-            DATA_DIR + '/mobile_aloha',
-            # DATA_DIR + '/velcro_taping',
-        ],  # only the first dataset_dir is used for val
-        'stats_dir': [
-            DATA_DIR + '/zip_tie_random',
-        ],
-        'sample_weights': [7.5, 2.5],
-        'train_ratio': 0.95,  # ratio of train data from the first dataset_dir
-        'episode_len': 900,
-        'camera_names': ['cam_high',
-                         # 'cam_low',
-                         'cam_left_wrist',
-                         'cam_right_wrist',
-                         'gel'
-                         ]
-    },
-
-    'zip_tie_random_unet_lowcotrain': {  # include loss
-        'dataset_dir': [
-            DATA_DIR + '/zip_tie_random',
-            # DATA_DIR + '/mobile_aloha/aloha_mobile_wash_pan',
-            DATA_DIR + '/mobile_aloha',
-            # DATA_DIR + '/velcro_taping',
-        ],  # only the first dataset_dir is used for val
-        'stats_dir': [
-            DATA_DIR + '/zip_tie_random',
-        ],
-        'sample_weights': [9.0, 1.0],
-        'train_ratio': 0.99,  # ratio of train data from the first dataset_dir
-        'episode_len': 900,
-        'camera_names': ['cam_high',
-                         # 'cam_low',
-                         'cam_left_wrist',
-                         'cam_right_wrist',
-                         'gel'
-                         ]
-    },
-    'velcro_taping_gel_tactile_unet_lowloss': {
-        'dataset_dir': DATA_DIR + '/velcro_taping',
-        'episode_len': 1100,
-        'camera_names': ['cam_high',
-                         # 'cam_low',
-                         'cam_left_wrist',
-                         'cam_right_wrist',
-                         'gel'
-                         ]
-    },
-    'boxlock_act': {
-        'dataset_dir': DATA_DIR + '/boxlock',
-        'episode_len': 900,  # 900
-        'camera_names': ['cam_high',
-                         # 'cam_low',
-                         'cam_left_wrist',
-                         'cam_right_wrist',
-                         ]
-    },
-    'alarm_act': {
-        'dataset_dir': DATA_DIR + '/alarm',
-        'episode_len': 900,  # 900
-        'camera_names': ['cam_high',
-                         # 'cam_low',
-                         'cam_left_wrist',
-                         'cam_right_wrist',
-                         ]
-    },
-    'alarm_act_4cams': {
-        'dataset_dir': DATA_DIR + '/alarm',
-        'episode_len': 900,  # 900
-        'camera_names': ['cam_high',
-                         'cam_low',
-                         'cam_left_wrist',
-                         'cam_right_wrist',
-                         ]
-    },
-
-    'alarm_act_3cams': {
-        'dataset_dir': DATA_DIR + '/alarm_random_pos',
-        'episode_len': 900,  # 900
-        'camera_names': ['cam_high',
-                         # 'cam_low',
-                         'cam_left_wrist',
-                         'cam_right_wrist',
-                         ]
-    },
-
-    'boxlockdown_act': {
-        'dataset_dir': DATA_DIR + '/boxlockdown',
-        'episode_len': 750,  # 900
-        'camera_names': ['cam_high',
-                         'cam_low',
-                         'cam_left_wrist',
-                         'cam_right_wrist',
-                         ]
-    },
-    'boxlockdown_act_3cam': {
-        'dataset_dir': DATA_DIR + '/boxlockdown',
-        'episode_len': 750,  # 900
-        'camera_names': ['cam_high',
-                         # 'cam_low',
-                         'cam_left_wrist',
-                         'cam_right_wrist',
-                         ]
-    },
-
-    'alarm_bias_act_4cams': {
-        'dataset_dir': DATA_DIR + '/alarm_bias',
-        'episode_len': 1000,  # 900
-        'camera_names': ['cam_high',
-                         'cam_low',
-                         'cam_left_wrist',
-                         'cam_right_wrist',
-                         ]
-    },
-
-    'alarm_random_pos_act_4cams': {
-        'dataset_dir': DATA_DIR + '/alarm_random_pos',
-        'episode_len': 1000,  # 900
-        'camera_names': ['cam_high',
-                         'cam_low',
-                         'cam_left_wrist',
-                         'cam_right_wrist',
-                         ]
-    },
-
-    'stapler_simple_act_4cams': {
-        'dataset_dir': DATA_DIR + '/stapler_simple',
-        'episode_len': 600,
-        'camera_names': ['cam_high',
-                         'cam_low',
-                         'cam_left_wrist',
-                         'cam_right_wrist',
-                         ]
-    },
-    "aloha_test": {
-        "dataset_dir": DATA_DIR + "/aloha_test",
-        "num_episodes": 50,
-        "episode_len": 500,
-        "camera_names": ["cam_high", "cam_low", "cam_left_wrist", "cam_right_wrist"],
-    },
-
-
-    # 'weighing_tie1': {  # include loss
-    #     'dataset_dir': [
-    #         DATA_DIR + '/weighing/open_balance',
-    #         DATA_DIR + '/weighing/place_battery',
-    #     ],  # only the first dataset_dir is used for val
-    #     'stats_dir': [
-    #         DATA_DIR + '/weighing/open_balance',
-    #         DATA_DIR + '/weighing/place_battery',
-    #     ],
-    #     'train_ratio': 0.99,  # ratio of train data from the first dataset_dir
-    #     'episode_len': 1800,
-    #     'camera_names': ['cam_high',
-    #                      'cam_low',
-    #                      'cam_left_wrist',
-    #                      'cam_right_wrist',
-    #                      ]
-    # },
-
-    'weighing_tie1': {  # include loss
-        'dataset_dir': [
-            DATA_DIR + '/weighing/place_battery',
-            DATA_DIR + '/weighing/remove_battery',
-        ],  # only the first dataset_dir is used for val
-        'stats_dir': [
-            DATA_DIR + '/weighing/place_battery',
-            DATA_DIR + '/weighing/remove_battery',
-        ],
-        'train_ratio': 0.99,  # ratio of train data from the first dataset_dir
-        'episode_len': 1000,
-        'camera_names': ['cam_high',
-                         'cam_low',
-                         'cam_left_wrist',
-                         'cam_right_wrist',
-                         ]
-    },
-
-    # 'weighing_tie2': {  # include loss
-    #     'dataset_dir': [
-    #         DATA_DIR + '/weighing/open_balance',
-    #         DATA_DIR + '/weighing/place_red_cube',
-    #         DATA_DIR + '/weighing/shutdown_balance',
-    #     ],  # only the first dataset_dir is used for val
-    #     'stats_dir': [
-    #         DATA_DIR + '/weighing/open_balance',
-    #         DATA_DIR + '/weighing/place_red_cube',
-    #         DATA_DIR + '/weighing/shutdown_balance',
-    #     ],
-    #     'train_ratio': 0.99,  # ratio of train data from the first dataset_dir
-    #     'episode_len': 1500,
-    #     'camera_names': ['cam_high',
-    #                      'cam_low',
-    #                      'cam_left_wrist',
-    #                      'cam_right_wrist',
-    #                      ]
-    # },
-
 'weighing_tie2': {  # include loss
         'dataset_dir': [
             DATA_DIR + '/weighing/place_red_cube',
@@ -627,6 +53,8 @@ TASK_CONFIGS = {
 
 
 ### ALOHA fixed constants
+# Default control rate. The example scripts take --fps (e.g. 30 or 50) and pass it to the robot /
+# teleoperator configs, which derive their own per-tick servo trajectory time from it.
 DT = 1/30  # FPS=30
 FPS = 30
 
@@ -634,45 +62,106 @@ JOINT_NAMES = ["waist", "shoulder", "elbow", "forearm_roll", "wrist_angle", "wri
 START_ARM_POSE = [0, -0.96, 1.16, 0, -0.3, 0, 0.02239, -0.02239,  0, -0.96, 1.16, 0, -0.3, 0, 0.02239, -0.02239]
 #START_ARM_POSE = [0, -0.8, 0.8, 0, 0, 0, 0.02239, -0.02239,  0, -0.8, 0.8, 0, 0, 0, 0.02239, -0.02239]
 
-# Sleep positions for robots (6 joints: waist, shoulder, elbow, forearm_roll, wrist_angle, wrist_rotate)
-PUPPET_SLEEP_POSITION = (0, -1.7, 1.55, 0.12, 0.65, 0)
-MASTER_SLEEP_POSITION = (0, -1.76, 1.55, 0, 0.0, 0)
+# Cameras as published by `roslaunch aloha 4arms_tactile_teleop.launch` (usb_cam nodes, rgb8,
+# 640x480, ~60Hz). The launch owns the /dev/CAM_* devices, so lerobot subscribes to these topics
+# (camera type "ros_image") instead of opening the devices itself.
+ROS_CAMERA_TOPICS = {
+    "cam_high": "/usb_cam_high/image_raw",
+    "cam_low": "/usb_cam_low/image_raw",
+    "cam_left_wrist": "/usb_cam_left_wrist/image_raw",
+    "cam_right_wrist": "/usb_cam_right_wrist/image_raw",
+}
+ROS_CAMERA_WIDTH = 640
+ROS_CAMERA_HEIGHT = 480
+
+# Sleep poses (waist, shoulder, elbow, forearm_roll, wrist_angle, wrist_rotate), taken from ALOHA2's
+# sleep_plus.py. Going to sleep is two-stage: first the OLD_* pose (the previously used sleep pose,
+# a path these arms have travelled many times), then the measured resting pose *_SLEEP_POSITION,
+# which is where torque can be cut without the arm dropping. Cutting torque at the OLD_* pose
+# dropped the arms hard (most obviously the master, wrist_angle=0.0). If an arm still drops on
+# shutdown, re-read the rest pose with `rostopic echo /puppet_left/joint_states -n1` and update.
+OLD_PUPPET_SLEEP_POSITION = (0, -1.7, 1.55, 0.12, 0.65, 0)
+OLD_MASTER_SLEEP_POSITION = (0, -1.76, 1.55, 0, 0.0, 0)
+PUPPET_SLEEP_POSITION = (0, -1.85, 1.594, 0, 0.782, 0)   # measured resting pose, not the factory one
+MASTER_SLEEP_POSITION = (0, -1.88, 1.605, 0, 0.281, 0)   # measured resting pose, not the factory one
+# Seconds per stage (old way-point, rest pose); the master gets a slower second stage.
+PUPPET_SLEEP_MOVE_TIMES = (1, 1)
+MASTER_SLEEP_MOVE_TIMES = (1, 1.5)
+# Multiplies every shutdown move time (gripper + both arm way-points). 2.0 = twice as slow as --sleep.
+SHUTDOWN_SPEED_SCALE = 2.0
+PUPPET_SHUTDOWN_MOVE_TIMES = tuple(t * SHUTDOWN_SPEED_SCALE for t in PUPPET_SLEEP_MOVE_TIMES)
+MASTER_SHUTDOWN_MOVE_TIMES = tuple(t * SHUTDOWN_SPEED_SCALE for t in MASTER_SLEEP_MOVE_TIMES)
 
 # Left finger position limits (qpos[7]), right_finger = -1 * left_finger
-MASTER_GRIPPER_POSITION_OPEN = 0.02417
-MASTER_GRIPPER_POSITION_CLOSE = 0.01244
+# Only the PUPPET pair is still used (real_env.get_qpos / get_qvel of the HDF5 scripts).
 PUPPET_GRIPPER_POSITION_OPEN = 0.05800
 PUPPET_GRIPPER_POSITION_CLOSE = 0.01844
 
-# Gripper joint limits (qpos[6])
-MASTER_GRIPPER_JOINT_OPEN = 0.7409
-MASTER_GRIPPER_JOINT_CLOSE = -0.0614
-PUPPET_GRIPPER_JOINT_OPEN = 0.0414
-PUPPET_GRIPPER_JOINT_CLOSE = -0.9265  # @gnq -0.6213 -> 0
+# Gripper joint limits (qpos[6]) - measured working range of the ALOHA2 grippers.
+# The four grippers do not share one range, so every arm is calibrated separately.
+# Re-measure with `python examples/aloha_ros/calibrate_master_gripper.py --side left` (and
+# calibrate_puppet_gripper.py) after any gripper is swapped or re-mounted.
+MASTER_LEFT_GRIPPER_JOINT_OPEN = 0.7762
+MASTER_LEFT_GRIPPER_JOINT_CLOSE = -0.0890
+MASTER_RIGHT_GRIPPER_JOINT_OPEN = 0.8038
+MASTER_RIGHT_GRIPPER_JOINT_CLOSE = -0.0522
+PUPPET_LEFT_GRIPPER_JOINT_OPEN = 0.0767
+PUPPET_LEFT_GRIPPER_JOINT_CLOSE = -1.5  # -1.3606
+PUPPET_RIGHT_GRIPPER_JOINT_OPEN = 0.0782
+PUPPET_RIGHT_GRIPPER_JOINT_CLOSE = -1.5  # -1.3898
+
+# (close, open) per side, for code that handles either arm (lerobot robots / teleoperators).
+MASTER_GRIPPER_JOINT_RANGE = {
+    "left": (MASTER_LEFT_GRIPPER_JOINT_CLOSE, MASTER_LEFT_GRIPPER_JOINT_OPEN),
+    "right": (MASTER_RIGHT_GRIPPER_JOINT_CLOSE, MASTER_RIGHT_GRIPPER_JOINT_OPEN),
+}
+PUPPET_GRIPPER_JOINT_RANGE = {
+    "left": (PUPPET_LEFT_GRIPPER_JOINT_CLOSE, PUPPET_LEFT_GRIPPER_JOINT_OPEN),
+    "right": (PUPPET_RIGHT_GRIPPER_JOINT_CLOSE, PUPPET_RIGHT_GRIPPER_JOINT_OPEN),
+}
 
 ############################ Helper functions ############################
 
-MASTER_GRIPPER_POSITION_NORMALIZE_FN = lambda x: (x - MASTER_GRIPPER_POSITION_CLOSE) / (MASTER_GRIPPER_POSITION_OPEN - MASTER_GRIPPER_POSITION_CLOSE)
+# --- gripper position (metres) ---
 PUPPET_GRIPPER_POSITION_NORMALIZE_FN = lambda x: (x - PUPPET_GRIPPER_POSITION_CLOSE) / (PUPPET_GRIPPER_POSITION_OPEN - PUPPET_GRIPPER_POSITION_CLOSE)
-MASTER_GRIPPER_POSITION_UNNORMALIZE_FN = lambda x: x * (MASTER_GRIPPER_POSITION_OPEN - MASTER_GRIPPER_POSITION_CLOSE) + MASTER_GRIPPER_POSITION_CLOSE
-PUPPET_GRIPPER_POSITION_UNNORMALIZE_FN = lambda x: x * (PUPPET_GRIPPER_POSITION_OPEN - PUPPET_GRIPPER_POSITION_CLOSE) + PUPPET_GRIPPER_POSITION_CLOSE
-MASTER2PUPPET_POSITION_FN = lambda x: PUPPET_GRIPPER_POSITION_UNNORMALIZE_FN(MASTER_GRIPPER_POSITION_NORMALIZE_FN(x))
-
-MASTER_GRIPPER_JOINT_NORMALIZE_FN = lambda x: (x - MASTER_GRIPPER_JOINT_CLOSE) / (MASTER_GRIPPER_JOINT_OPEN - MASTER_GRIPPER_JOINT_CLOSE)
-PUPPET_GRIPPER_JOINT_NORMALIZE_FN = lambda x: (x - PUPPET_GRIPPER_JOINT_CLOSE) / (PUPPET_GRIPPER_JOINT_OPEN - PUPPET_GRIPPER_JOINT_CLOSE)
-MASTER_GRIPPER_JOINT_UNNORMALIZE_FN = lambda x: x * (MASTER_GRIPPER_JOINT_OPEN - MASTER_GRIPPER_JOINT_CLOSE) + MASTER_GRIPPER_JOINT_CLOSE
-PUPPET_GRIPPER_JOINT_UNNORMALIZE_FN = lambda x: x * (PUPPET_GRIPPER_JOINT_OPEN - PUPPET_GRIPPER_JOINT_CLOSE) + PUPPET_GRIPPER_JOINT_CLOSE
-MASTER2PUPPET_JOINT_FN = lambda x: PUPPET_GRIPPER_JOINT_UNNORMALIZE_FN(MASTER_GRIPPER_JOINT_NORMALIZE_FN(x))
-
-MASTER_GRIPPER_VELOCITY_NORMALIZE_FN = lambda x: x / (MASTER_GRIPPER_POSITION_OPEN - MASTER_GRIPPER_POSITION_CLOSE)
 PUPPET_GRIPPER_VELOCITY_NORMALIZE_FN = lambda x: x / (PUPPET_GRIPPER_POSITION_OPEN - PUPPET_GRIPPER_POSITION_CLOSE)
 
-MASTER_POS2JOINT = lambda x: MASTER_GRIPPER_POSITION_NORMALIZE_FN(x) * (MASTER_GRIPPER_JOINT_OPEN - MASTER_GRIPPER_JOINT_CLOSE) + MASTER_GRIPPER_JOINT_CLOSE
-MASTER_JOINT2POS = lambda x: MASTER_GRIPPER_POSITION_UNNORMALIZE_FN((x - MASTER_GRIPPER_JOINT_CLOSE) / (MASTER_GRIPPER_JOINT_OPEN - MASTER_GRIPPER_JOINT_CLOSE))
-PUPPET_POS2JOINT = lambda x: PUPPET_GRIPPER_POSITION_NORMALIZE_FN(x) * (PUPPET_GRIPPER_JOINT_OPEN - PUPPET_GRIPPER_JOINT_CLOSE) + PUPPET_GRIPPER_JOINT_CLOSE
-PUPPET_JOINT2POS = lambda x: PUPPET_GRIPPER_POSITION_UNNORMALIZE_FN((x - PUPPET_GRIPPER_JOINT_CLOSE) / (PUPPET_GRIPPER_JOINT_OPEN - PUPPET_GRIPPER_JOINT_CLOSE))
 
-MASTER_GRIPPER_JOINT_MID = (MASTER_GRIPPER_JOINT_OPEN + MASTER_GRIPPER_JOINT_CLOSE)/2
+def _clamp01(x):
+    """Clamp to [0, 1] so master over-travel cannot command the puppet past its limit."""
+    return min(max(x, 0.0), 1.0)
+
+
+# --- gripper joint (rad) ---
+# master joint -> normalised gripper action (0: closed, 1: open)
+MASTER_LEFT_GRIPPER_JOINT_NORMALIZE_FN = lambda x: (x - MASTER_LEFT_GRIPPER_JOINT_CLOSE) / (MASTER_LEFT_GRIPPER_JOINT_OPEN - MASTER_LEFT_GRIPPER_JOINT_CLOSE)
+MASTER_RIGHT_GRIPPER_JOINT_NORMALIZE_FN = lambda x: (x - MASTER_RIGHT_GRIPPER_JOINT_CLOSE) / (MASTER_RIGHT_GRIPPER_JOINT_OPEN - MASTER_RIGHT_GRIPPER_JOINT_CLOSE)
+MASTER_LEFT_GRIPPER_JOINT_UNNORMALIZE_FN = lambda x: x * (MASTER_LEFT_GRIPPER_JOINT_OPEN - MASTER_LEFT_GRIPPER_JOINT_CLOSE) + MASTER_LEFT_GRIPPER_JOINT_CLOSE
+MASTER_RIGHT_GRIPPER_JOINT_UNNORMALIZE_FN = lambda x: x * (MASTER_RIGHT_GRIPPER_JOINT_OPEN - MASTER_RIGHT_GRIPPER_JOINT_CLOSE) + MASTER_RIGHT_GRIPPER_JOINT_CLOSE
+# puppet joint <-> normalised gripper observation / action
+PUPPET_LEFT_GRIPPER_JOINT_NORMALIZE_FN = lambda x: (x - PUPPET_LEFT_GRIPPER_JOINT_CLOSE) / (PUPPET_LEFT_GRIPPER_JOINT_OPEN - PUPPET_LEFT_GRIPPER_JOINT_CLOSE)
+PUPPET_RIGHT_GRIPPER_JOINT_NORMALIZE_FN = lambda x: (x - PUPPET_RIGHT_GRIPPER_JOINT_CLOSE) / (PUPPET_RIGHT_GRIPPER_JOINT_OPEN - PUPPET_RIGHT_GRIPPER_JOINT_CLOSE)
+PUPPET_LEFT_GRIPPER_JOINT_UNNORMALIZE_FN = lambda x: x * (PUPPET_LEFT_GRIPPER_JOINT_OPEN - PUPPET_LEFT_GRIPPER_JOINT_CLOSE) + PUPPET_LEFT_GRIPPER_JOINT_CLOSE
+PUPPET_RIGHT_GRIPPER_JOINT_UNNORMALIZE_FN = lambda x: x * (PUPPET_RIGHT_GRIPPER_JOINT_OPEN - PUPPET_RIGHT_GRIPPER_JOINT_CLOSE) + PUPPET_RIGHT_GRIPPER_JOINT_CLOSE
+# master joint -> puppet joint, clamped
+MASTER2PUPPET_LEFT_JOINT_FN = lambda x: PUPPET_LEFT_GRIPPER_JOINT_UNNORMALIZE_FN(_clamp01(MASTER_LEFT_GRIPPER_JOINT_NORMALIZE_FN(x)))
+MASTER2PUPPET_RIGHT_JOINT_FN = lambda x: PUPPET_RIGHT_GRIPPER_JOINT_UNNORMALIZE_FN(_clamp01(MASTER_RIGHT_GRIPPER_JOINT_NORMALIZE_FN(x)))
+
+# --- master "half open" pose ---
+MASTER_LEFT_GRIPPER_JOINT_MID = (MASTER_LEFT_GRIPPER_JOINT_OPEN + MASTER_LEFT_GRIPPER_JOINT_CLOSE) / 2
+MASTER_RIGHT_GRIPPER_JOINT_MID = (MASTER_RIGHT_GRIPPER_JOINT_OPEN + MASTER_RIGHT_GRIPPER_JOINT_CLOSE) / 2
+
+# --- backward-compatible single-sided aliases (they resolve to the RIGHT arm, as in ALOHA2) ---
+# Only the old HDF5 scripts in aloha_scripts/ (real_env.py, one_side_teleop.py,
+# record_episodes_compress.py) still import these; new code uses the per-side names above.
+MASTER_GRIPPER_JOINT_OPEN = MASTER_RIGHT_GRIPPER_JOINT_OPEN
+MASTER_GRIPPER_JOINT_CLOSE = MASTER_RIGHT_GRIPPER_JOINT_CLOSE
+PUPPET_GRIPPER_JOINT_OPEN = PUPPET_RIGHT_GRIPPER_JOINT_OPEN
+PUPPET_GRIPPER_JOINT_CLOSE = PUPPET_RIGHT_GRIPPER_JOINT_CLOSE
+MASTER_GRIPPER_JOINT_NORMALIZE_FN = MASTER_RIGHT_GRIPPER_JOINT_NORMALIZE_FN
+PUPPET_GRIPPER_JOINT_UNNORMALIZE_FN = PUPPET_RIGHT_GRIPPER_JOINT_UNNORMALIZE_FN
+MASTER2PUPPET_JOINT_FN = MASTER2PUPPET_RIGHT_JOINT_FN
+MASTER_GRIPPER_JOINT_MID = MASTER_RIGHT_GRIPPER_JOINT_MID
 
 
 

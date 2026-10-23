@@ -16,7 +16,7 @@
 
 import logging
 import time
-import numpy as np
+from typing import Any
 
 from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
 
@@ -48,63 +48,39 @@ except Exception:
             sys.path.insert(0, aloha_scripts_dir)
 
 from constants import (
-    DT,
+    MASTER_GRIPPER_JOINT_RANGE,
+    MASTER_SHUTDOWN_MOVE_TIMES,
+    MASTER_SLEEP_MOVE_TIMES,
     MASTER_SLEEP_POSITION,
-    MASTER_GRIPPER_JOINT_OPEN,
+    OLD_MASTER_SLEEP_POSITION,
+    START_ARM_POSE,
 )
-
-
-def get_arm_joint_positions(bot):
-    """Get current arm joint positions (6 joints)."""
-    joint_states = bot.dxl.joint_states
-    if joint_states and len(joint_states.position) >= 6:
-        return list(joint_states.position[:6])
-    return [0.0] * 6
-
-
-def get_arm_gripper_position(bot):
-    """Get current gripper joint position."""
-    joint_states = bot.dxl.joint_states
-    if joint_states and len(joint_states.position) > 6:
-        return joint_states.position[6]
-    return 0.0
-
-
-def move_arm_smoothly(bot, target_pose, move_time=1.0):
-    """Move arm smoothly to target position using trajectory interpolation."""
-    num_steps = int(move_time / DT)
-    curr_pose = get_arm_joint_positions(bot)
-    traj = np.linspace(curr_pose, target_pose, num_steps)
-    for t in range(num_steps):
-        bot.arm.set_joint_positions(traj[t], blocking=False)
-        time.sleep(DT)
-
-
-def move_gripper_smoothly(bot, target_position, move_time=0.5):
-    """Move gripper smoothly to target position using trajectory interpolation."""
-    from interbotix_xs_msgs.msg import JointSingleCommand
-    gripper_command = JointSingleCommand(name="gripper")
-    num_steps = int(move_time / DT)
-    curr_position = get_arm_gripper_position(bot)
-    traj = np.linspace([curr_position], [target_position], num_steps)
-    for t in range(num_steps):
-        gripper_command.cmd = traj[t][0]
-        bot.gripper.core.pub_single.publish(gripper_command)
-        time.sleep(DT)
 
 # Try to import ROS dependencies
 try:
     from interbotix_xs_modules.arm import InterbotixManipulatorXS
+    from robot_utils import move_arms, move_grippers, set_arm_position_time_profile, torque_off, torque_on
     ROS_AVAILABLE = True
 except ImportError:
     ROS_AVAILABLE = False
     logger.warning("ROS dependencies not available. Install interbotix_xs_modules to use WidowXRos.")
+
+ARM_MOTORS = ("waist", "shoulder", "elbow", "forearm_roll", "wrist_angle", "wrist_rotate")
+# Durations of the slow moves to the start pose (ALOHA2 one_side_teleop.py DEFAULT_PREP_ARM_MOVE_TIME).
+START_ARM_MOVE_TIME_S = 2.0
+START_GRIPPER_MOVE_TIME_S = 0.5
 
 
 class WidowXRos(Teleoperator):
     """
     WidowX Teleoperator using ROS InterbotixManipulatorXS for control.
     This is the master/leader arm used for teleoperation.
+
+    Follows ALOHA2's act-triple-plus-aloha2/aloha_scripts: the arm is set to position mode with a
+    time-based profile so that it can be driven to the start / rest pose, and is held rigid (torque
+    on) until unlock() hands it to the operator. `gripper.pos` is the gripper opening normalised to
+    [0, 1] with this arm's own calibration (0 = closed, 1 = open; a squeeze past the calibrated
+    stop can go slightly outside); the puppet maps it to its own gripper range.
     """
 
     config_class = WidowXRosConfig
@@ -116,11 +92,16 @@ class WidowXRos(Teleoperator):
                 "ROS dependencies not available. Please install: "
                 "pip install interbotix-xseries-modules"
             )
-        
+
         super().__init__(config)
         self.config = config
-        
-        # Initialize ROS robot
+        assert config.side is not None  # filled in by WidowXRosConfig.__post_init__
+        self.side: str = config.side
+        self.dt = 1.0 / config.fps
+        self.gripper_joint_close, self.gripper_joint_open = MASTER_GRIPPER_JOINT_RANGE[self.side]
+
+        # Initialize ROS robot. This only connects to the arm's ROS services; motor modes and
+        # torque are set up in connect().
         self.bot = InterbotixManipulatorXS(
             robot_model=config.robot_model,
             group_name="arm",
@@ -128,26 +109,23 @@ class WidowXRos(Teleoperator):
             robot_name=config.robot_name,
             init_node=config.init_ros_node
         )
-        
-        # Setup robot (master bot setup: PWM mode, torque off)
-        self._setup_robot()
 
-    def _setup_robot(self):
-        """Setup master robot with proper operating modes."""
-        self.bot.dxl.robot_set_operating_modes("group", "arm", "pwm")
-        self.bot.dxl.robot_set_operating_modes("single", "gripper", "current_based_position")
-        self.bot.dxl.robot_torque_enable("group", "arm", False)
-        self.bot.dxl.robot_torque_enable("single", "gripper", False)
-        logger.info(f"WidowXRos {self.config.robot_name} setup complete")
+        self._connected = False
+        # True once shutdown() cut the torque at the rest pose; disconnect() then has nothing to do.
+        self._powered_down = False
+
+    def normalize_gripper(self, joint_position: float) -> float:
+        """Gripper joint angle (rad) -> opening in [0, 1] (not clamped)."""
+        return (joint_position - self.gripper_joint_close) / (self.gripper_joint_open - self.gripper_joint_close)
+
+    def unnormalize_gripper(self, opening: float) -> float:
+        """Opening in [0, 1] -> gripper joint angle (rad)."""
+        return self.gripper_joint_close + opening * (self.gripper_joint_open - self.gripper_joint_close)
 
     @property
     def action_features(self) -> dict[str, type]:
         """Action features: joint positions."""
-        motor_names = [
-            "waist", "shoulder", "elbow", "forearm_roll", 
-            "wrist_angle", "wrist_rotate", "gripper"
-        ]
-        return {f"{motor}.pos": float for motor in motor_names}
+        return {f"{motor}.pos": float for motor in (*ARM_MOTORS, "gripper")}
 
     @property
     def feedback_features(self) -> dict[str, type]:
@@ -156,16 +134,26 @@ class WidowXRos(Teleoperator):
 
     @property
     def is_connected(self) -> bool:
-        """ROS robots are always 'connected' if initialized."""
-        return True
+        """Whether connect() has set the arm up."""
+        return self._connected
+
+    @property
+    def is_powered_down(self) -> bool:
+        """True once shutdown() left the arm at the rest pose with torque off."""
+        return self._powered_down
 
     def connect(self, calibrate: bool = True) -> None:
-        """Connect to robot."""
+        """Set the arm up, optionally move it to the start pose and release it to the operator."""
         if self.is_connected:
-            # raise DeviceAlreadyConnectedError(f"{self} already connected")
-            pass
-        
+            raise DeviceAlreadyConnectedError(f"{self} already connected")
+
         self.configure()
+        self._connected = True
+        if self.config.move_to_start_on_connect:
+            self.move_to_start()
+        if self.config.release_on_connect:
+            logger.warning(f"{self}: releasing the arm now - hold the handle.")
+            self.unlock()
         logger.info(f"{self} connected.")
 
     @property
@@ -178,36 +166,74 @@ class WidowXRos(Teleoperator):
         logger.info("Calibration is handled by ROS system. Skipping lerobot calibration.")
 
     def configure(self) -> None:
-        """Apply configuration to robot."""
-        # Configuration is done in _setup_robot
-        pass
+        """Master setup (ALOHA2 opening_ceremony): arm in position mode with a time-based profile,
+        gripper in position mode, torque on (the arm is held until unlock()).
+
+        Writing the operating mode goes to EEPROM and briefly drops the arm's torque, so this runs
+        once, while the arm rests.
+        """
+        set_arm_position_time_profile(self.bot, START_ARM_MOVE_TIME_S, START_ARM_MOVE_TIME_S / 4)
+        self.bot.dxl.robot_set_operating_modes("single", "gripper", "position")
+        torque_on(self.bot)
+        self._powered_down = False
+        logger.info(f"WidowXRos {self.config.robot_name} setup complete")
+
+    def lock(self) -> None:
+        """Torque the arm and gripper on: the arm holds its current pose (pause / before moving it)."""
+        torque_on(self.bot)
+
+    def unlock(self) -> None:
+        """Torque the arm and gripper off so the operator can move them."""
+        torque_off(self.bot)
+
+    def move_to_start(self, start_open_ratio: float | None = None) -> None:
+        """Move the arm to START_ARM_POSE and park the gripper at `start_open_ratio` (0 = closed,
+        1 = open; default from the config). The arm stays locked afterwards."""
+        if not self._connected:
+            raise DeviceNotConnectedError(f"{self} is not connected.")
+        ratio = self.config.start_open_ratio if start_open_ratio is None else start_open_ratio
+        torque_on(self.bot)
+        move_arms([self.bot], [START_ARM_POSE[:6]], move_time=START_ARM_MOVE_TIME_S)
+        move_grippers(
+            [self.bot], [self.unnormalize_gripper(ratio)], move_time=START_GRIPPER_MOVE_TIME_S, dt=self.dt
+        )
+        self._powered_down = False
+
+    def _move_to_rest(self, move_times: tuple[float, ...]) -> None:
+        # Two stages (old sleep pose, then the measured rest pose), gripper opened first: see
+        # sleep_modify.py and the sleep-pose comment in constants.py.
+        torque_on(self.bot)
+        move_grippers([self.bot], [self.gripper_joint_open], move_time=move_times[0], dt=self.dt)
+        for pose, move_time in zip((OLD_MASTER_SLEEP_POSITION, MASTER_SLEEP_POSITION), move_times, strict=True):
+            move_arms([self.bot], [pose], move_time=move_time)
+
+    def sleep(self) -> None:
+        """Go to the rest pose and keep holding it (torque stays on), like `sleep_modify.py --sleep`."""
+        self._move_to_rest(MASTER_SLEEP_MOVE_TIMES)
+
+    def shutdown(self) -> None:
+        """Go to the rest pose slowly, then cut torque, like `sleep_modify.py --shut_down`."""
+        self._move_to_rest(MASTER_SHUTDOWN_MOVE_TIMES)
+        time.sleep(0.3)  # settle margin: move_arms() already waited for the move itself
+        torque_off(self.bot)
+        self._powered_down = True
 
     def get_action(self) -> dict[str, float]:
-        """Get current joint positions from master arm."""
+        """Get current joint positions from master arm (gripper as its normalised opening)."""
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
 
         start = time.perf_counter()
-        joint_states = self.bot.dxl.joint_states
-        
-        action_dict = {}
-        if joint_states and len(joint_states.position) >= 6:
-            action_dict["waist.pos"] = joint_states.position[0]
-            action_dict["shoulder.pos"] = joint_states.position[1]
-            action_dict["elbow.pos"] = joint_states.position[2]
-            action_dict["forearm_roll.pos"] = joint_states.position[3]
-            action_dict["wrist_angle.pos"] = joint_states.position[4]
-            action_dict["wrist_rotate.pos"] = joint_states.position[5]
-            action_dict["gripper.pos"] = joint_states.position[6] if len(joint_states.position) > 6 else 0.0
-        else:
-            logger.warning("Joint states not available")
-            for motor in ["waist", "shoulder", "elbow", "forearm_roll", "wrist_angle", "wrist_rotate", "gripper"]:
-                action_dict[f"{motor}.pos"] = 0.0
-            raise ValueError("Joint states not available")
-        
+        joint_states: Any = self.bot.dxl.joint_states
+        if joint_states is None or len(joint_states.position) < 7:
+            raise RuntimeError(f"{self}: joint states not available")
+        position = joint_states.position
+        action_dict = {f"{motor}.pos": float(position[i]) for i, motor in enumerate(ARM_MOTORS)}
+        action_dict["gripper.pos"] = self.normalize_gripper(float(position[6]))
+
         dt_ms = (time.perf_counter() - start) * 1e3
         logger.debug(f"{self} read action: {dt_ms:.1f}ms")
-        
+
         return action_dict
 
     def send_feedback(self, feedback: dict[str, float]) -> None:
@@ -215,26 +241,16 @@ class WidowXRos(Teleoperator):
         raise NotImplementedError("Master arm does not receive feedback.")
 
     def disconnect(self) -> None:
-        """Disconnect from robot."""
+        """Walk the arm to the rest pose and power it off (unless shutdown() already did)."""
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
-        
-        try:
-            # Move to sleep position smoothly
-            print(f"Moving {self} to sleep position...")
-            move_arm_smoothly(self.bot, list(MASTER_SLEEP_POSITION), move_time=1.0)
-            
-            # Open gripper smoothly
-            logger.info(f"Opening gripper...")
-            move_gripper_smoothly(self.bot, MASTER_GRIPPER_JOINT_OPEN, move_time=0.5)
-            
-            # Turn off torque
-            logger.info(f"Turning off torque...")
-            self.bot.dxl.robot_torque_enable("group", "arm", False)
-            self.bot.dxl.robot_torque_enable("single", "gripper", False)
-            
-        except Exception as e:
-            logger.warning(f"Error during sleep sequence: {e}. Continuing with disconnect...")
 
+        if not self._powered_down:
+            try:
+                logger.info(f"Moving {self} to the rest pose and powering off...")
+                self.shutdown()
+            except Exception as e:
+                logger.warning(f"Error during shutdown sequence: {e}. Continuing with disconnect...")
+
+        self._connected = False
         logger.info(f"{self} disconnected.")
-

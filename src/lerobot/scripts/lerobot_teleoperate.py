@@ -76,6 +76,7 @@ from pprint import pformat
 
 from lerobot.cameras.opencv import OpenCVCameraConfig  # noqa: F401
 from lerobot.cameras.realsense import RealSenseCameraConfig  # noqa: F401
+from lerobot.cameras.ros_image import RosImageCameraConfig  # noqa: F401
 from lerobot.cameras.zmq import ZMQCameraConfig  # noqa: F401
 from lerobot.configs import parser
 from lerobot.processor import (
@@ -87,6 +88,7 @@ from lerobot.processor import (
 from lerobot.robots import (  # noqa: F401
     Robot,
     RobotConfig,
+    aloha_ros,
     bi_openarm_follower,
     bi_rebot_b601_follower,
     bi_so_follower,
@@ -104,6 +106,7 @@ from lerobot.robots import (  # noqa: F401
 from lerobot.teleoperators import (  # noqa: F401
     Teleoperator,
     TeleoperatorConfig,
+    aloha_teleop_ros,
     bi_openarm_leader,
     bi_openarm_mini,
     bi_rebot_102_leader,

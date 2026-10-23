@@ -1,78 +1,31 @@
 #!/usr/bin/env python
-import time
+"""Measure one puppet (follower) gripper's joint range for constants.py.
+
+    python examples/aloha_ros/calibrate_puppet_gripper.py --side left
+
+Needs `roslaunch aloha 4arms_tactile_teleop.launch` running. The puppet gripper normally holds its
+position, so this first reboots it, switches it to PWM mode and cuts its torque (only the gripper,
+the arm is untouched) so it can be moved by hand. Close it fully and open it fully, then Ctrl+C:
+the printed min/max go into PUPPET_<SIDE>_GRIPPER_JOINT_CLOSE / _OPEN in aloha_scripts/constants.py.
+"""
+
+import argparse
+import os
 import sys
 
-# Import both possible classes
-from lerobot.robots.viperx_ros import ViperXRos, ViperXRosConfig
-from lerobot.teleoperators.widowx_ros import WidowXRos, WidowXRosConfig
+script_dir = os.path.dirname(os.path.abspath(__file__))
+aloha_scripts_dir = os.path.join(script_dir, "aloha_scripts")
+if aloha_scripts_dir not in sys.path:
+    sys.path.insert(0, aloha_scripts_dir)
 
-# ====== Configuration ======
-ARM_TYPE = "puppet"  # "master" or "puppet"
-ARM_SIDE = "right"   # "left" or "right"
-# ===========================
-
-
-def calibrate():
-    name = f"{ARM_TYPE}_{ARM_SIDE}"
-    print(f"🔄 Connecting to {name.upper()} for calibration...")
-
-    if ARM_TYPE == "master":
-        config = WidowXRosConfig(robot_name=name)
-        arm = WidowXRos(config)
-    else:
-        config = ViperXRosConfig(robot_name=name)
-        arm = ViperXRos(config)
-
-    try:
-        arm.connect()
-
-        # Try to disable torque (for puppet arm)
-        if ARM_TYPE == "puppet":
-            print("🔓 Trying to release torque... If it still cannot be moved, check driver settings.")
-            # The `bot` attribute is based on your previous `dir(teleop)` output
-            if hasattr(arm, "bot"):
-                try:
-                    # Try disabling torque for all motors through low-level core API
-                    arm.bot.core.robot_set_motor_registers("group", "all", "Torque_Enable", 0)
-                except:
-                    print("⚠️ Could not disable torque in code; please cut motor power manually or disable it in Wizard.")
-
-        print("\n" + "=" * 55)
-        print(f"🔧 {name.upper()} gripper calibration mode 🔧")
-        print("=" * 55)
-        print("Operation: 1. Move the gripper manually  2. Record values  3. Ctrl+C to exit")
-        print("-" * 55)
-
-        while True:
-            # Automatically choose an available data getter
-            data = {}
-            if hasattr(arm, "get_observation"):
-                data = arm.get_observation()
-            elif hasattr(arm, "get_action"):
-                data = arm.get_action()
-
-            gripper_pos = None
-            for key in data.keys():
-                if "gripper" in key:
-                    val = data[key]
-                    gripper_pos = val.item() if hasattr(val, "item") else val
-                    break
-
-            if gripper_pos is not None:
-                print(f"\rCurrent {name} gripper position: {gripper_pos:8.4f}", end="")
-            else:
-                print(f"\rNo gripper data found. Available keys: {list(data.keys())}", end="")
-
-            time.sleep(0.1)
-
-    except KeyboardInterrupt:
-        print("\n\n✅ Stopped reading values.")
-    except Exception as e:
-        print(f"\n❌ Error occurred: {e}")
-    finally:
-        print("Disconnecting...")
-        sys.exit(0)
+from test_gripper_range import run  # noqa: E402
 
 
 if __name__ == "__main__":
-    calibrate()
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--side", choices=("left", "right"), default="right")
+    parser.add_argument(
+        "--no_release", action="store_true", help="Do not release the gripper torque before reading."
+    )
+    args = parser.parse_args()
+    raise SystemExit(run(f"puppet_{args.side}", release=not args.no_release))

@@ -15,10 +15,13 @@
 # limitations under the License.
 
 import logging
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from functools import cached_property
 
 from lerobot.teleoperators.widowx_ros.config_widowx_ros import WidowXRosConfig
 from lerobot.teleoperators.widowx_ros.widowx_ros import WidowXRos
+from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
 
 from ..teleoperator import Teleoperator
 from .config_aloha_teleop_ros import AlohaTeleopRosConfig
@@ -30,6 +33,7 @@ class AlohaTeleopRos(Teleoperator):
     """
     ALOHA Bimanual Teleoperator System using dual WidowX leader arms via ROS.
     Based on the ALOHA (A Low-cost Open-source Hardware System for Bimanual Teleoperation) design.
+    See WidowXRos for how each arm is set up; moves that involve both arms run on both at once.
     """
 
     config_class = AlohaTeleopRosConfig
@@ -39,31 +43,34 @@ class AlohaTeleopRos(Teleoperator):
         super().__init__(config)
         self.config = config
 
-        # Create left arm config
-        left_arm_config = WidowXRosConfig(
-            id=f"{config.id}_left" if config.id else None,
-            robot_name=config.left_arm_robot_name,
-            robot_model=config.robot_model,
-            init_ros_node=config.init_ros_node,
-        )
+        def arm_config(side: str, robot_name: str, init_ros_node: bool) -> WidowXRosConfig:
+            return WidowXRosConfig(
+                id=f"{config.id}_{side}" if config.id else None,
+                robot_name=robot_name,
+                robot_model=config.robot_model,
+                init_ros_node=init_ros_node,
+                side=side,
+                fps=config.fps,
+                move_to_start_on_connect=False,  # both arms move together in move_to_start()
+                start_open_ratio=config.start_open_ratio,
+                release_on_connect=False,  # both arms are released together in connect()
+            )
 
-        # Create right arm config
-        right_arm_config = WidowXRosConfig(
-            id=f"{config.id}_right" if config.id else None,
-            robot_name=config.right_arm_robot_name,
-            robot_model=config.robot_model,
-            init_ros_node=False,  # Only initialize node once
-        )
+        self.left_arm = WidowXRos(arm_config("left", config.left_arm_robot_name, config.init_ros_node))
+        # Only initialize node once
+        self.right_arm = WidowXRos(arm_config("right", config.right_arm_robot_name, False))
 
-        self.left_arm = WidowXRos(left_arm_config)
-        self.right_arm = WidowXRos(right_arm_config)
+    def _on_both_arms(self, fn: Callable[[WidowXRos], None]) -> None:
+        """Run `fn` on the left and the right arm at the same time; re-raises the first error."""
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            list(executor.map(fn, (self.left_arm, self.right_arm)))
 
     @cached_property
     def action_features(self) -> dict[str, type]:
         """Action features for both arms."""
-        return {f"left_{motor}.pos": float for motor in self.left_arm.action_features.keys()} | {
-            f"right_{motor}.pos": float for motor in self.right_arm.action_features.keys()
-        }
+        features: dict[str, type] = {f"left_{key}": float for key in self.left_arm.action_features}
+        features.update({f"right_{key}": float for key in self.right_arm.action_features})
+        return features
 
     @cached_property
     def feedback_features(self) -> dict[str, type]:
@@ -76,9 +83,17 @@ class AlohaTeleopRos(Teleoperator):
         return self.left_arm.is_connected and self.right_arm.is_connected
 
     def connect(self, calibrate: bool = True) -> None:
-        """Connect both arms."""
+        """Set both arms up, optionally move them to the start pose and release them to the operator."""
+        if self.is_connected:
+            raise DeviceAlreadyConnectedError(f"{self} already connected")
+
         self.left_arm.connect(calibrate)
         self.right_arm.connect(calibrate)
+        if self.config.move_to_start_on_connect:
+            self.move_to_start()
+        if self.config.release_on_connect:
+            logger.warning(f"{self}: releasing both master arms now - hold the handles.")
+            self.unlock()
 
     @property
     def is_calibrated(self) -> bool:
@@ -91,9 +106,31 @@ class AlohaTeleopRos(Teleoperator):
         self.right_arm.calibrate()
 
     def configure(self) -> None:
-        """Configure both arms."""
+        """Re-apply the motor setup of both arms (connect() already does this once)."""
         self.left_arm.configure()
         self.right_arm.configure()
+
+    def lock(self) -> None:
+        """Hold both master arms in place (torque on), e.g. on pause or after an episode."""
+        self.left_arm.lock()
+        self.right_arm.lock()
+
+    def unlock(self) -> None:
+        """Release both master arms (torque off) so the operator can move them."""
+        self.left_arm.unlock()
+        self.right_arm.unlock()
+
+    def move_to_start(self, start_open_ratio: float | None = None) -> None:
+        """Move both arms to START_ARM_POSE and park the grippers; they stay locked."""
+        self._on_both_arms(lambda arm: arm.move_to_start(start_open_ratio))
+
+    def sleep(self) -> None:
+        """Both arms to the rest pose, torque kept on."""
+        self._on_both_arms(lambda arm: arm.sleep())
+
+    def shutdown(self) -> None:
+        """Both arms to the rest pose, then torque off."""
+        self._on_both_arms(lambda arm: arm.shutdown())
 
     def get_action(self) -> dict[str, float]:
         """Get actions from both master arms."""
@@ -114,7 +151,15 @@ class AlohaTeleopRos(Teleoperator):
         raise NotImplementedError("Master arms do not receive feedback.")
 
     def disconnect(self) -> None:
-        """Disconnect both arms."""
+        """Walk both arms to the rest pose and power them off (unless shutdown() already did)."""
+        if not self.is_connected:
+            raise DeviceNotConnectedError(f"{self} is not connected.")
+
+        try:
+            self._on_both_arms(lambda arm: None if arm.is_powered_down else arm.shutdown())
+        except Exception as e:
+            logger.warning(f"Error during shutdown sequence: {e}. Continuing with disconnect...")
+
+        # No further motion once powered down
         self.left_arm.disconnect()
         self.right_arm.disconnect()
-

@@ -1,367 +1,154 @@
 #!/usr/bin/env python
 """
-Example script for using AlohaRos robot with lerobot camera system.
-This uses ROS InterbotixManipulatorXS for robot control and lerobot cameras for image capture.
+Bimanual ALOHA2 teleoperation (no recording) with AlohaTeleopRos (master arms) and AlohaRos (puppet
+arms). Arm control follows ALOHA2's act-triple-plus-aloha2/aloha_scripts/one_side_teleop.py.
 
-This example demonstrates:
-- Using AlohaTeleopRos (master arms) to get actions
-- Using AlohaRos (puppet arms) to send actions and get observations
+Before running, start the arms and cameras and keep that terminal open:
+    roslaunch aloha 4arms_tactile_teleop.launch
+
+    python examples/aloha_ros/aloha_ros_teleop.py --fps 30     (or --fps 50)
+
+Keys:
+    → (Right arrow)  start, and resume after a pause
+    ← (Left arrow)   pause and lock: the puppets stop following, the masters are held rigid
+    ESC (or q)       stop: all four arms go to the rest pose and power off
 """
 
-import time
+import argparse
+import os
 import sys
-import numpy as np
+import time
 
-from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
+from lerobot.cameras.ros_image import RosImageCameraConfig
 from lerobot.robots.aloha_ros import AlohaRos, AlohaRosConfig
 from lerobot.teleoperators.aloha_teleop_ros import AlohaTeleopRos, AlohaTeleopRosConfig
-from lerobot.utils.visualization_utils import init_rerun, log_rerun_data
+from lerobot.utils.keyboard_input import init_keyboard_listener
 from lerobot.utils.robot_utils import precise_sleep
+from lerobot.utils.visualization_utils import init_rerun, log_rerun_data
 
 # Import constants from aloha_scripts/constants.py
-import sys
-import os
-# Add aloha_scripts directory to path
 script_dir = os.path.dirname(os.path.abspath(__file__))
 aloha_scripts_dir = os.path.join(script_dir, 'aloha_scripts')
 if aloha_scripts_dir not in sys.path:
     sys.path.insert(0, aloha_scripts_dir)
 
 from constants import (
-    START_ARM_POSE,
-    MASTER_GRIPPER_JOINT_OPEN,
-    MASTER_GRIPPER_JOINT_CLOSE,
-    MASTER_GRIPPER_JOINT_MID,
-    PUPPET_GRIPPER_JOINT_OPEN,
-    PUPPET_GRIPPER_JOINT_CLOSE,
-    MASTER2PUPPET_JOINT_FN,
-    FPS
+    FPS,
+    ROS_CAMERA_HEIGHT,
+    ROS_CAMERA_TOPICS,
+    ROS_CAMERA_WIDTH,
 )
+from robot_utils import run_parallel
 
-# Try to import pynput for keyboard listening
-try:
-    from pynput import keyboard
-    PYNPUT_AVAILABLE = True
-except ImportError:
-    PYNPUT_AVAILABLE = False
-    print("Warning: pynput not available. Press Ctrl+C to exit instead of 'q'.")
-
-# Camera configuration (same as aloha_teleop.py)
-camera_config = {
-    "cam_high": OpenCVCameraConfig(
-        index_or_path="/dev/CAM_HIGH", 
-        width=640, 
-        height=480, 
-        fps=FPS
-    ),
-    "cam_right_wrist": OpenCVCameraConfig(
-        index_or_path="/dev/CAM_RIGHT_WRIST", 
-        width=640, 
-        height=480, 
-        fps=FPS
-    ),
-    "cam_left_wrist": OpenCVCameraConfig(
-        index_or_path="/dev/CAM_LEFT_WRIST", 
-        width=640, 
-        height=480, 
-        fps=FPS
-    ),
-    "cam_low": OpenCVCameraConfig(
-        index_or_path="/dev/CAM_LOW", 
-        width=640, 
-        height=480, 
-        fps=FPS
-    ),
-}
-
-# Create master arms config (teleoperators)
-master_config = AlohaTeleopRosConfig(
-    id="aloha_master",
-    left_arm_robot_name="master_left",
-    right_arm_robot_name="master_right",
-    robot_model="wx250s",
-    init_ros_node=True,
-)
-
-# Create puppet arms config (robots)
-puppet_config = AlohaRosConfig(
-    id="aloha_puppet",
-    puppet_left_robot_name="puppet_left",
-    puppet_right_robot_name="puppet_right",
-    robot_model="vx300s",
-    init_ros_node=False,  # Node already initialized by master
-    cameras=camera_config,
-)
-
-# Initialize visualization
-init_rerun(session_name="aloha_ros_teleop")
-
-# Create and connect master arms (teleoperators)
-master = AlohaTeleopRos(master_config)
-master.connect()
-
-# Create and connect puppet arms (robots)
-puppet = AlohaRos(puppet_config)
-puppet.connect()
+# Gripper opening masters and puppets park at before teleoperation (0.0 = closed, 1.0 = open)
+START_OPEN_RATIO = 1.0
 
 
-def get_arm_joint_positions(bot):
-    """Get current arm joint positions (6 joints)."""
-    joint_states = bot.bot.dxl.joint_states
-    if joint_states and len(joint_states.position) >= 6:
-        return list(joint_states.position[:6])
-    return [0.0] * 6
-
-
-def get_arm_gripper_position(bot):
-    """Get current gripper joint position."""
-    joint_states = bot.bot.dxl.joint_states
-    if joint_states and len(joint_states.position) > 6:
-        return joint_states.position[6]
-    return 0.0
-
-
-def move_arms_smoothly(bot_list, target_pose_list, move_time=1.0):
-    """Move arms smoothly to target positions using trajectory interpolation."""
-    DT = 1/30  # FPS=30
-    num_steps = int(move_time / DT)
-    curr_pose_list = [get_arm_joint_positions(bot) for bot in bot_list]
-    traj_list = [np.linspace(curr_pose, target_pose, num_steps) for curr_pose, target_pose in zip(curr_pose_list, target_pose_list)]
-    for t in range(num_steps):
-        t0 = time.perf_counter()
-        for bot_id, bot in enumerate(bot_list):
-            bot.bot.arm.set_joint_positions(traj_list[bot_id][t], blocking=False)
-        precise_sleep(max(1.0 / FPS - (time.perf_counter() - t0), 0.0))
-
-
-def move_grippers_smoothly(bot_list, target_pose_list, move_time=0.5):
-    """Move grippers smoothly to target positions using trajectory interpolation."""
-    from interbotix_xs_msgs.msg import JointSingleCommand
-    DT = 1/30  # FPS=30
-    gripper_command = JointSingleCommand(name="gripper")
-    num_steps = int(move_time / DT)
-    curr_pose_list = [get_arm_gripper_position(bot) for bot in bot_list]
-    traj_list = [np.linspace([curr_pose], [target_pose], num_steps) for curr_pose, target_pose in zip(curr_pose_list, target_pose_list)]
-    for t in range(num_steps):
-        for bot_id, bot in enumerate(bot_list):
-            gripper_command.cmd = traj_list[bot_id][t][0]
-            bot.bot.gripper.core.pub_single.publish(gripper_command)
-        time.sleep(DT)
-
-
-def prep_robots(master_left, master_right, puppet_left, puppet_right):
-    """Prepare robots: set operating modes, enable torque, and move to starting position."""
-    # Reboot puppet gripper motors and set operating modes
-    puppet_left.bot.dxl.robot_reboot_motors("single", "gripper", True)
-    puppet_right.bot.dxl.robot_reboot_motors("single", "gripper", True)
-    puppet_left.bot.dxl.robot_set_operating_modes("group", "arm", "position")
-    puppet_left.bot.dxl.robot_set_operating_modes("single", "gripper", "current_based_position")
-    puppet_right.bot.dxl.robot_set_operating_modes("group", "arm", "position")
-    puppet_right.bot.dxl.robot_set_operating_modes("single", "gripper", "current_based_position")
-    
-    # Set master operating modes (switch from PWM to position for initialization)
-    master_left.bot.dxl.robot_set_operating_modes("group", "arm", "position")
-    master_left.bot.dxl.robot_set_operating_modes("single", "gripper", "position")
-    master_right.bot.dxl.robot_set_operating_modes("group", "arm", "position")
-    master_right.bot.dxl.robot_set_operating_modes("single", "gripper", "position")
-    
-    # Enable torque on all robots
-    master_left.bot.dxl.robot_torque_enable("group", "arm", True)
-    master_left.bot.dxl.robot_torque_enable("single", "gripper", True)
-    master_right.bot.dxl.robot_torque_enable("group", "arm", True)
-    master_right.bot.dxl.robot_torque_enable("single", "gripper", True)
-    puppet_left.bot.dxl.robot_torque_enable("group", "arm", True)
-    puppet_left.bot.dxl.robot_torque_enable("single", "gripper", True)
-    puppet_right.bot.dxl.robot_torque_enable("group", "arm", True)
-    puppet_right.bot.dxl.robot_torque_enable("single", "gripper", True)
-    
-    # Move arms to starting position smoothly
-    start_arm_qpos = START_ARM_POSE[:6]
-    print("Moving all arms to starting position...")
-    move_arms_smoothly([master_left, master_right, puppet_left, puppet_right], [start_arm_qpos] * 4, move_time=1)
-    
-    # Move grippers to starting position smoothly
-    print("Moving grippers to starting position...")
-    move_grippers_smoothly(
-        [master_left, master_right, puppet_left, puppet_right],
-        [MASTER_GRIPPER_JOINT_MID, MASTER_GRIPPER_JOINT_MID, PUPPET_GRIPPER_JOINT_CLOSE, PUPPET_GRIPPER_JOINT_CLOSE],
-        move_time=0.5
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument(
+        "--fps", type=int, default=FPS, help="Control rate in Hz, e.g. 30 or 50 (default: %(default)s)."
     )
-    
-    print("Robots prepared and moved to starting position.")
+    args = parser.parse_args()
+    fps = args.fps
 
+    # Cameras, read from the topics the launch publishes
+    camera_config = {
+        name: RosImageCameraConfig(topic=topic, width=ROS_CAMERA_WIDTH, height=ROS_CAMERA_HEIGHT, fps=fps)
+        for name, topic in ROS_CAMERA_TOPICS.items()
+    }
 
-def get_arm_gripper_positions(bot):
-    """Get current gripper joint position."""
-    if hasattr(bot, 'bot'):
-        # For WidowXRos/ViperXRos wrapper
-        return bot.bot.dxl.joint_states.position[6] if len(bot.bot.dxl.joint_states.position) > 6 else 0.0
-    else:
-        # Direct InterbotixManipulatorXS
-        return bot.dxl.joint_states.position[6] if len(bot.dxl.joint_states.position) > 6 else 0.0
+    # Create master arms config (teleoperators); released after the start key, not on connect
+    master_config = AlohaTeleopRosConfig(
+        id="aloha_master",
+        left_arm_robot_name="master_left",
+        right_arm_robot_name="master_right",
+        robot_model="wx250s",
+        init_ros_node=True,
+        fps=fps,
+        move_to_start_on_connect=False,
+        start_open_ratio=START_OPEN_RATIO,
+        release_on_connect=False,
+    )
 
+    # Create puppet arms config (robots)
+    puppet_config = AlohaRosConfig(
+        id="aloha_puppet",
+        puppet_left_robot_name="puppet_left",
+        puppet_right_robot_name="puppet_right",
+        robot_model="vx300s",
+        init_ros_node=False,  # Node already initialized by master
+        fps=fps,
+        move_to_start_on_connect=False,
+        start_open_ratio=START_OPEN_RATIO,
+        cameras=camera_config,
+    )
 
-def press_to_start(master_left, master_right):
-    """Wait for user to close both grippers to start teleoperation."""
-    # Disable torque for only gripper joints of master robots to allow user movement
-    master_left.bot.dxl.robot_torque_enable("single", "gripper", False)
-    master_right.bot.dxl.robot_torque_enable("single", "gripper", False)
-    print('Close both master grippers to start...')
-    close_thresh = -0.3
-    pressed_left = False
-    pressed_right = False
-    while not (pressed_left and pressed_right):
-        t1 = time.perf_counter()
-        if not pressed_left:
-            gripper_pos_left = get_arm_gripper_positions(master_left)
-            if gripper_pos_left < close_thresh:
-                pressed_left = True
-                print("Left gripper closed!")
-        if not pressed_right:
-            gripper_pos_right = get_arm_gripper_positions(master_right)
-            if gripper_pos_right < close_thresh:
-                pressed_right = True
-                print("Right gripper closed!")
-        precise_sleep(max(1.0 / FPS - (time.perf_counter() - t1), 0.0))
-    
-    # Turn off master arm torque (master should be in PWM mode for teleoperation)
-    master_left.bot.dxl.robot_set_operating_modes("group", "arm", "pwm")
-    master_left.bot.dxl.robot_torque_enable("group", "arm", False)
-    master_left.bot.dxl.robot_torque_enable("single", "gripper", False)
-    master_right.bot.dxl.robot_set_operating_modes("group", "arm", "pwm")
-    master_right.bot.dxl.robot_torque_enable("group", "arm", False)
-    master_right.bot.dxl.robot_torque_enable("single", "gripper", False)
-    print('Started! Begin teleoperation...')
+    # Initialize visualization
+    init_rerun(session_name="aloha_ros_teleop")
 
+    # Create and connect master arms (teleoperators) and puppet arms (robots)
+    master = AlohaTeleopRos(master_config)
+    puppet = AlohaRos(puppet_config)
+    master.connect()
+    puppet.connect()
 
-# Prepare robots: move to starting position
-prep_robots(master.left_arm, master.right_arm, puppet.left_arm, puppet.right_arm)
-
-# Wait for user to press both grippers to start
-press_to_start(master.left_arm, master.right_arm)
-
-# Setup keyboard listener for 'q' key to exit
-exit_flag = False
-
-def on_press(key):
-    global exit_flag
+    listener, events = init_keyboard_listener()
     try:
-        if hasattr(key, 'char') and key.char == 'q':
-            print("\n'q' key pressed. Exiting...")
-            exit_flag = True
-            return False  # Stop listener
-    except AttributeError:
-        pass
+        # Prepare robots: all four arms to the start pose at once
+        print("Moving all arms to the start pose...")
+        run_parallel(master.move_to_start, puppet.move_to_start)
 
-listener = None
-if PYNPUT_AVAILABLE:
-    listener = keyboard.Listener(on_press=on_press)
-    listener.start()
-    print("Press 'q' to quit")
-else:
-    print("Press Ctrl+C to quit")
+        paused = True
+        if listener is None:
+            print("No keyboard listener available: starting right away, Ctrl+C to stop.")
+            master.unlock()
+            puppet.begin_blend()
+            paused = False
+        else:
+            print("Press → (Right arrow) to start teleoperation, ESC to quit.")
 
-# Gripper commands for puppet arms
-from interbotix_xs_msgs.msg import JointSingleCommand
-gripper_command_left = JointSingleCommand(name="gripper")
-gripper_command_right = JointSingleCommand(name="gripper")
+        while not events["stop_recording"]:
+            t0 = time.perf_counter()
 
-try:
-    while not exit_flag:
-        t0 = time.perf_counter()
-        
-        # Get joint states from master arms (directly from ROS)
-        master_left_joint_states = master.left_arm.bot.dxl.joint_states
-        master_right_joint_states = master.right_arm.bot.dxl.joint_states
-        
-        # Sync joint positions from master to puppet (left arm)
-        if master_left_joint_states and len(master_left_joint_states.position) >= 6:
-            master_left_state_joints = list(master_left_joint_states.position[:6])
-            puppet.left_arm.bot.arm.set_joint_positions(master_left_state_joints, blocking=False)
-        
-        # Sync joint positions from master to puppet (right arm)
-        if master_right_joint_states and len(master_right_joint_states.position) >= 6:
-            master_right_state_joints = list(master_right_joint_states.position[:6])
-            puppet.right_arm.bot.arm.set_joint_positions(master_right_state_joints, blocking=False)
-        
-        # Sync gripper positions (with mapping function) - left arm
-        if master_left_joint_states and len(master_left_joint_states.position) > 6:
-            master_left_gripper_joint = master_left_joint_states.position[6]
-            puppet_left_gripper_joint_target = MASTER2PUPPET_JOINT_FN(master_left_gripper_joint)
-            gripper_command_left.cmd = puppet_left_gripper_joint_target
-            puppet.left_arm.bot.gripper.core.pub_single.publish(gripper_command_left)
-        
-        # Sync gripper positions (with mapping function) - right arm
-        if master_right_joint_states and len(master_right_joint_states.position) > 6:
-            master_right_gripper_joint = master_right_joint_states.position[6]
-            puppet_right_gripper_joint_target = MASTER2PUPPET_JOINT_FN(master_right_gripper_joint)
-            gripper_command_right.cmd = puppet_right_gripper_joint_target
-            puppet.right_arm.bot.gripper.core.pub_single.publish(gripper_command_right)
-        
-        # Get observations from puppet arms (robots)
-        obs = puppet.get_observation()
-        
-        # Create action dict for logging (from master joint states)
-        action = {}
-        if master_left_joint_states and len(master_left_joint_states.position) >= 6:
-            action["left_waist.pos"] = master_left_joint_states.position[0]
-            action["left_shoulder.pos"] = master_left_joint_states.position[1]
-            action["left_elbow.pos"] = master_left_joint_states.position[2]
-            action["left_forearm_roll.pos"] = master_left_joint_states.position[3]
-            action["left_wrist_angle.pos"] = master_left_joint_states.position[4]
-            action["left_wrist_rotate.pos"] = master_left_joint_states.position[5]
-            if len(master_left_joint_states.position) > 6:
-                action["left_gripper.pos"] = master_left_joint_states.position[6]
-        
-        if master_right_joint_states and len(master_right_joint_states.position) >= 6:
-            action["right_waist.pos"] = master_right_joint_states.position[0]
-            action["right_shoulder.pos"] = master_right_joint_states.position[1]
-            action["right_elbow.pos"] = master_right_joint_states.position[2]
-            action["right_forearm_roll.pos"] = master_right_joint_states.position[3]
-            action["right_wrist_angle.pos"] = master_right_joint_states.position[4]
-            action["right_wrist_rotate.pos"] = master_right_joint_states.position[5]
-            if len(master_right_joint_states.position) > 6:
-                action["right_gripper.pos"] = master_right_joint_states.position[6]
-        
-        # Print joint positions (less frequently to reduce output)
-        # Uncomment if you want to see detailed output
-        # print("=" * 60)
-        # print("MASTER LEFT ARM (Action):")
-        # for key, value in action.items():
-        #     if key.startswith("left_") and key.endswith(".pos"):
-        #         print(f"  {key:25}: {value:8.3f}")
-        # 
-        # print("\nMASTER RIGHT ARM (Action):")
-        # for key, value in action.items():
-        #     if key.startswith("right_") and key.endswith(".pos"):
-        #         print(f"  {key:25}: {value:8.3f}")
-        # 
-        # print("\nPUPPET LEFT ARM (Observation):")
-        # for key, value in obs.items():
-        #     if key.startswith("left_") and key.endswith(".pos"):
-        #         print(f"  {key:25}: {value:8.3f}")
-        # 
-        # print("\nPUPPET RIGHT ARM (Observation):")
-        # for key, value in obs.items():
-        #     if key.startswith("right_") and key.endswith(".pos"):
-        #         print(f"  {key:25}: {value:8.3f}")
-        # print("=" * 60)
-        
-        # Log to rerun
-        log_rerun_data(obs, action)
-        
-        precise_sleep(max(1.0 / FPS - (time.perf_counter() - t0), 0.0))
-        
-except KeyboardInterrupt:
-    print("\nInterrupted by user")
-finally:
-    # Disconnect robots
-    print("Disconnecting robots...")
-    if master.is_connected:
-        master.disconnect()
-    if puppet.is_connected:
-        puppet.disconnect()
-    if PYNPUT_AVAILABLE and listener is not None and listener.is_alive():
-        listener.stop()
-    print("All devices disconnected. Exiting.")
+            if events["exit_early"]:
+                if events["rerecord_episode"]:
+                    # ← pause and lock
+                    if not paused:
+                        master.lock()
+                        paused = True
+                        print("Paused and locked (masters rigid). → to resume, ESC to stop and power off.")
+                elif paused:
+                    # → start / resume: hand the masters back, ease the puppets onto them
+                    master.unlock()
+                    puppet.begin_blend()
+                    paused = False
+                    print("Teleoperating. ← = pause & lock, ESC = stop and power off.")
+                events["exit_early"] = False
+                events["rerecord_episode"] = False
 
+            action = None
+            if not paused:
+                action = master.get_action()
+                puppet.send_action(action)
+
+            # Get observations from puppet arms (robots) and log to rerun
+            obs = puppet.get_observation()
+            log_rerun_data(observation=obs, action=action)
+
+            precise_sleep(max(1.0 / fps - (time.perf_counter() - t0), 0.0))
+
+    except KeyboardInterrupt:
+        print("\nInterrupted by user")
+    finally:
+        # Hold the masters, then walk all four arms to the rest pose and power them off
+        print("Moving all arms to the rest pose and powering off...")
+        master.lock()
+        run_parallel(puppet.disconnect, master.disconnect)
+        if listener is not None:
+            listener.stop()
+        print("All devices disconnected. Exiting.")
+
+
+if __name__ == "__main__":
+    main()

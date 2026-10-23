@@ -1,3 +1,5 @@
+import threading
+
 import numpy as np
 import time
 from constants import DT
@@ -178,28 +180,77 @@ def get_arm_gripper_positions(bot):
     return joint_position
 
 def move_arms(bot_list, target_pose_list, move_time=1):
-    num_steps = int(move_time / DT)
-    curr_pose_list = [get_arm_joint_positions(bot) for bot in bot_list]
-    traj_list = [np.linspace(curr_pose, target_pose, num_steps) for curr_pose, target_pose in zip(curr_pose_list, target_pose_list)]
-    for t in range(num_steps):
-        for bot_id, bot in enumerate(bot_list):
-            bot.arm.set_joint_positions(traj_list[bot_id][t], blocking=False)
-        time.sleep(DT)
+    """Move every bot in bot_list to its target in target_pose_list, in lockstep, over move_time.
 
-def move_grippers(bot_list, target_pose_list, move_time):
+    One trajectory command per bot, with moving_time=move_time - the servo's own time-based
+    Profile_Velocity/Profile_Acceleration already interpolates smoothly from wherever the arm
+    currently is, so there is no need to also step through a python-side linspace.
+
+    (From ALOHA2's robot_utils.py.) The previous implementation did both at once and they fought
+    each other: it published a new micro-step target every DT but never told the servo to expect
+    anything that fast, so each arm's trajectory-time registers stayed at whatever they were last
+    set to (2.0s from every InterbotixManipulatorXS(...) construction). Every tick the servo
+    restarted a fresh "reach this in 2 seconds" plan toward a target only 1/num_steps of the way
+    along, so the arm was still well short of the destination when move_time elapsed, and a
+    caller that cut torque right after could catch it mid-trajectory and let it drop.
+
+    set_trajectory_time() is called on its own first because set_joint_positions() runs
+    check_joint_limits() BEFORE it applies the new moving_time, so its velocity check would
+    otherwise divide by whatever moving_time was left over from the arm's previous use (e.g. the
+    per-tick teleop value 1/fps), reject an ordinary move as tens of rad/s, and silently return
+    False.
+    """
+    accel_time = max(move_time / 4.0, 0.05)
+    for bot, target in zip(bot_list, target_pose_list):
+        bot.arm.set_trajectory_time(moving_time=move_time, accel_time=accel_time)
+        if not bot.arm.set_joint_positions(list(target), moving_time=move_time, accel_time=accel_time, blocking=False):
+            print("Warning: {} arm target rejected (would exceed joint limits); holding position."
+                  .format(bot.dxl.robot_name))
+    time.sleep(move_time)
+
+def move_grippers(bot_list, target_pose_list, move_time, dt=DT):
     gripper_command = JointSingleCommand(name="gripper")
-    num_steps = int(move_time / DT)
+    num_steps = max(int(move_time / dt), 1)
     curr_pose_list = [get_arm_gripper_positions(bot) for bot in bot_list]
     traj_list = [np.linspace(curr_pose, target_pose, num_steps) for curr_pose, target_pose in zip(curr_pose_list, target_pose_list)]
     for t in range(num_steps):
         for bot_id, bot in enumerate(bot_list):
             gripper_command.cmd = traj_list[bot_id][t]
             bot.gripper.core.pub_single.publish(gripper_command)
-        time.sleep(DT)
+        time.sleep(dt)
 
-def setup_puppet_bot(bot):
+def set_arm_position_time_profile(bot, moving_time, accel_time=None):
+    """Put the arm group in position mode with a time-based profile (from ALOHA2's one_side_teleop.py).
+
+    robot_set_operating_modes() defaults profile_type to "velocity" with profile_velocity=0 (no
+    speed limit) when not told otherwise; in that mode the servo reads every later moving_time as
+    a raw velocity limit and snaps to its target near max speed. "time" makes moving_time mean
+    what every caller here assumes: the duration of the move.
+
+    This rewrites the EEPROM Operating_Mode, which briefly drops the arm's torque - only call it
+    while the arm is resting. To change the cadence later, use bot.arm.set_trajectory_time().
+    """
+    if accel_time is None:
+        accel_time = min(DT, moving_time / 2)
+    bot.dxl.robot_set_operating_modes(
+        "group",
+        "arm",
+        "position",
+        "time",
+        int(moving_time * 1000),
+        int(accel_time * 1000),
+    )
+    # Force set_trajectory_time() to rewrite the registers: its python-side cache no longer
+    # matches what the servo holds after the mode switch.
+    bot.arm.moving_time = None
+    bot.arm.accel_time = None
+    bot.arm.set_trajectory_time(moving_time=moving_time, accel_time=accel_time)
+
+def setup_puppet_bot(bot, moving_time=DT, accel_time=None):
+    if accel_time is None:
+        accel_time = min(DT, moving_time / 2)
     bot.dxl.robot_reboot_motors("single", "gripper", True)
-    bot.dxl.robot_set_operating_modes("group", "arm", "position")
+    set_arm_position_time_profile(bot, moving_time, accel_time)
     bot.dxl.robot_set_operating_modes("single", "gripper", "current_based_position")
     torque_on(bot)
 
@@ -223,3 +274,25 @@ def torque_off(bot):
 def torque_on(bot):
     bot.dxl.robot_torque_enable("group", "arm", True)
     bot.dxl.robot_torque_enable("single", "gripper", True)
+
+def run_parallel(*callables):
+    """Run each zero-argument callable in its own thread and wait for all of them.
+
+    Used to move several arms at once (e.g. master and puppet to their start pose), the same way
+    sleep_modify.py moves all four arms in parallel. Re-raises the first exception, if any.
+    """
+    errors = []
+
+    def _run(fn):
+        try:
+            fn()
+        except BaseException as exc:  # noqa: BLE001 - re-raised in the caller's thread below
+            errors.append(exc)
+
+    threads = [threading.Thread(target=_run, args=(fn,)) for fn in callables]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    if errors:
+        raise errors[0]

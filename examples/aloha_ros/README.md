@@ -35,74 +35,90 @@ The implementation follows a layered architecture:
 ### Layer 3: Examples
 
 5. **`examples/aloha_ros/`** - Usage examples
-   - `aloha_ros_teleop.py` - Complete teleoperation example
+   - `aloha_ros_teleop.py` / `aloha_ros_teleop_one_arm.py` - Teleoperation (no recording)
+   - `aloha_ros_record.py` - Record a LeRobot dataset
+   - `aloha_ros_eval.py` - Run a trained policy
+   - `calibrate_master_gripper.py` / `calibrate_puppet_gripper.py` - Measure gripper ranges
+   - `aloha_scripts/sleep_modify.py` - Rest pose / power off (`--sleep`, `--shut_down`, `--shut_down_puppet`)
+
+## ALOHA2 control
+
+Arm control follows ALOHA2's `act-triple-plus-aloha2/aloha_scripts`:
+
+- **Servo profile**: the arms run in position mode with a *time*-based profile; every per-tick command
+  asks the servos to arrive in `1 / fps` seconds. `fps` (e.g. 30 or 50) is set on `AlohaRosConfig` /
+  `AlohaTeleopRosConfig` and must match the loop rate (`--fps` of the example scripts,
+  `--robot.fps` + `--dataset.fps` for `lerobot-record`).
+- **Gripper**: `*_gripper.pos` in observations and actions is the gripper opening normalised to [0, 1]
+  (0 = closed, 1 = open) with each arm's own calibration (`*_LEFT/RIGHT_GRIPPER_JOINT_OPEN/CLOSE` in
+  `aloha_scripts/constants.py`). The puppet maps it to its joint angle, so recording and deployment share
+  one mapping. Datasets recorded before this change stored raw joint angles and are not compatible.
+- **Safety**: commands are clamped to the joint limits, the puppet gripper stops squeezing once it stalls
+  on an object, the first commands after (re)starting are blended in from the current pose, and the arms
+  go to the measured rest pose in two stages before torque is cut (`disconnect()`, `shutdown()`).
+- **Cameras**: the launch owns `/dev/CAM_*` (usb_cam nodes), so the cameras are read from its topics with
+  the `ros_image` camera type (rgb8, frames are already RGB).
 
 ## Usage
+
+```bash
+# Terminal 1: arms + cameras (keep it running)
+roslaunch aloha 4arms_tactile_teleop.launch
+
+# Terminal 2
+source ~/interbotix_ws_noetic/devel/setup.bash
+source .venv/bin/activate
+python examples/aloha_ros/aloha_ros_teleop.py --fps 30     # → start/resume, ← pause & lock, ESC stop
+python examples/aloha_ros/aloha_ros_record.py --fps 30
+python examples/aloha_ros/aloha_ros_eval.py --fps 30
+```
 
 ### Basic Teleoperation
 
 ```python
+from lerobot.cameras.ros_image import RosImageCameraConfig
 from lerobot.robots.aloha_ros import AlohaRos, AlohaRosConfig
 from lerobot.teleoperators.aloha_teleop_ros import AlohaTeleopRos, AlohaTeleopRosConfig
-from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
 
-# Configure cameras
+FPS = 30
+
+# Cameras, read from the topics published by the launch
 camera_config = {
-    "cam_high": OpenCVCameraConfig(index_or_path="/dev/CAM_HIGH", width=640, height=480, fps=30),
-    "cam_right_wrist": OpenCVCameraConfig(index_or_path="/dev/CAM_RIGHT_WRIST", width=640, height=480, fps=30),
-    "cam_left_wrist": OpenCVCameraConfig(index_or_path="/dev/CAM_LEFT_WRIST", width=640, height=480, fps=30),
-    "cam_low": OpenCVCameraConfig(index_or_path="/dev/CAM_LOW", width=640, height=480, fps=30),
+    name: RosImageCameraConfig(topic=f"/usb_{name}/image_raw", width=640, height=480, fps=FPS)
+    for name in ("cam_high", "cam_low", "cam_left_wrist", "cam_right_wrist")
 }
 
-# Create master arms (teleoperators)
-master = AlohaTeleopRos(AlohaTeleopRosConfig(
-    id="aloha_master",
-    left_arm_robot_name="master_left",
-    right_arm_robot_name="master_right",
-    robot_model="wx250s",
-    init_ros_node=True,
-))
+# Master arms (teleoperators): connect() sets them up, moves them to the start pose and releases them
+master = AlohaTeleopRos(AlohaTeleopRosConfig(id="aloha_master", init_ros_node=True, fps=FPS))
+# Puppet arms (robots): connect() sets them up and moves them to the start pose
+puppet = AlohaRos(AlohaRosConfig(id="aloha_puppet", init_ros_node=False, fps=FPS, cameras=camera_config))
 master.connect()
-
-# Create puppet arms (robots)
-puppet = AlohaRos(AlohaRosConfig(
-    id="aloha_puppet",
-    puppet_left_robot_name="puppet_left",
-    puppet_right_robot_name="puppet_right",
-    robot_model="vx300s",
-    init_ros_node=False,
-    cameras=camera_config,
-))
 puppet.connect()
 
-# Teleoperation loop
-while True:
-    # Get actions from master arms
-    action = master.get_action()
-    
-    # Get observations from puppet arms
-    obs = puppet.get_observation()
-    
-    # Send actions to puppet arms
-    puppet.send_action(action)
-    
-    time.sleep(0.02)
+try:
+    while True:
+        puppet.send_action(master.get_action())
+        obs = puppet.get_observation()
+finally:
+    puppet.disconnect()  # rest pose (two stages), torque off
+    master.disconnect()
 ```
 
 ## Requirements
 
-1. ROS environment must be set up
+1. ROS environment must be set up (`source ~/interbotix_ws_noetic/devel/setup.bash`, do not unset `PYTHONPATH`)
 2. Install interbotix dependencies:
    ```bash
    pip install interbotix-xseries-modules
    ```
-3. ROS launch files for robots must be running:
+3. `roslaunch aloha 4arms_tactile_teleop.launch` must be running:
    - `master_left` and `master_right` (WidowX arms)
    - `puppet_left` and `puppet_right` (ViperX arms)
+   - `/usb_cam_{high,low,left_wrist,right_wrist}/image_raw` (cameras)
 
 ## Differences from Direct Motor Control
 
 - **Control Method**: Uses ROS `InterbotixManipulatorXS` instead of direct Dynamixel motor control
-- **Camera System**: Uses lerobot camera system (same as ViperX) instead of ROS image topics
+- **Camera System**: Uses the lerobot camera system with the `ros_image` type, reading the launch's camera topics
 - **Architecture**: Separated into base components (single arm) and combined components (dual arm)
 
