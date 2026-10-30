@@ -24,18 +24,29 @@ frames instead, pixel-identical to the openpi image-mode datasets but ~40x large
 meta/stats.json gets exact whole-dataset quantiles (q01/q10/q50/q90/q99) for every numeric
 feature, computed from the raw arrays, so augment_dataset_quantile_stats.py is not needed.
 
+--relative-copy-dir additionally writes a copy for training with relative joint actions
+(`--policy.use_relative_actions=true`, grippers excluded): data/ and videos/ are hard links to the
+output dataset (no extra space), meta/ is its own, and its stats.json differs only in "action":
+exact statistics of action[t + k] - state[t] on the joints (absolute on the grippers) over every
+--relative-chunk-size window inside an episode, i.e. what such a policy is trained on.
+
+Needs h5py (`uv pip install h5py`).
+
 Example:
     python examples/aloha_ros/convert_aloha_hdf5_to_lerobot_v30.py \
         --raw-dir /mnt/ssd2/guningquan/Dataset/packaging \
         --output-dir /mnt/ssd2/guningquan/Dataset_v30/packaging_v30 \
+        --relative-copy-dir /mnt/ssd2/guningquan/Dataset_v30/packaging_v30_relative \
         --task "packaging the items" \
         --fps 50
 """
 
 import argparse
+import json
 import logging
 import re
 import shutil
+import subprocess
 from pathlib import Path
 
 import cv2
@@ -128,6 +139,41 @@ def write_exact_quantiles(root: Path, numeric: dict[str, list[np.ndarray]]) -> N
     write_stats(stats, root)
 
 
+def write_relative_copy(
+    root: Path, relative_root: Path, numeric: dict[str, list[np.ndarray]], chunk_size: int
+) -> None:
+    """Copy of `root` for relative joint actions (see the module docstring): hard-linked data/ and
+    videos/, own meta/ whose "action" stats cover the relative action chunks."""
+    relative_root.mkdir(parents=True)
+    for sub in ("data", "videos"):
+        if (root / sub).is_dir():
+            subprocess.run(["cp", "-al", str(root / sub), str(relative_root / sub)], check=True)
+    shutil.copytree(root / "meta", relative_root / "meta")
+
+    mask = np.array(["gripper" not in name for name in JOINT_NAMES], dtype=np.float64)
+    chunks = []
+    for state, action in zip(numeric["observation.state"], numeric["action"], strict=True):
+        state, action = state.astype(np.float64), action.astype(np.float64)
+        starts = np.arange(len(action) - chunk_size + 1)
+        window = starts[:, None] + np.arange(chunk_size)[None, :]
+        chunks.append((action[window] - state[starts][:, None, :] * mask).reshape(-1, len(JOINT_NAMES)))
+    values = np.concatenate(chunks, axis=0)
+
+    stats = load_stats(relative_root)
+    stats["action"] = {
+        "mean": values.mean(axis=0),
+        "std": values.std(axis=0),
+        "min": values.min(axis=0),
+        "max": values.max(axis=0),
+        "count": np.array([len(values)]),
+        **{f"q{int(round(q * 100)):02d}": np.quantile(values, q, axis=0) for q in DEFAULT_QUANTILES},
+    }
+    write_stats(stats, relative_root)
+    note = {"chunk_size": chunk_size, "exclude_joints": ["gripper"], "source": root.name}
+    (relative_root / "meta" / "relative_action_stats.json").write_text(json.dumps(note, indent=4) + "\n")
+    logging.info(f"Relative-action copy ({len(values)} rows, chunk size {chunk_size}) -> {relative_root}")
+
+
 def convert(args: argparse.Namespace) -> None:
     raw_dir = Path(args.raw_dir)
     output_dir = Path(args.output_dir)
@@ -140,10 +186,12 @@ def convert(args: argparse.Namespace) -> None:
         if len(files) != len(wanted):
             raise ValueError(f"Some requested episodes were not found in {raw_dir}")
 
-    if output_dir.exists():
-        if not args.overwrite:
-            raise FileExistsError(f"{output_dir} already exists; pass --overwrite to replace it")
-        shutil.rmtree(output_dir)
+    relative_dir = Path(args.relative_copy_dir) if args.relative_copy_dir else None
+    for target in (output_dir, relative_dir):
+        if target is not None and target.exists():
+            if not args.overwrite:
+                raise FileExistsError(f"{target} already exists; pass --overwrite to replace it")
+            shutil.rmtree(target)
 
     cameras, sources, compressed, image_shapes = inspect_first_episode(files[0], args.cameras)
     features = build_features(sources, image_shapes, args.use_videos)
@@ -200,6 +248,8 @@ def convert(args: argparse.Namespace) -> None:
     (output_dir / "meta" / "source_episodes.tsv").write_text(
         "episode_index\tsource_file\tnum_frames\n" + "\n".join(episode_map) + "\n"
     )
+    if relative_dir is not None:
+        write_relative_copy(output_dir, relative_dir, numeric, args.relative_chunk_size)
     logging.info(f"Done: {len(files)} episodes, {sum(len(c) for c in numeric['action'])} frames -> {output_dir}")
 
 
@@ -227,7 +277,17 @@ def main() -> None:
     # Both modes stage every frame as PNG first (video mode encodes the staged frames per episode).
     parser.add_argument("--image-writer-processes", type=int, default=8, help="Processes writing PNG frames")
     parser.add_argument("--image-writer-threads", type=int, default=4, help="Threads per PNG writer process")
-    parser.add_argument("--overwrite", action="store_true", help="Delete --output-dir first if it exists")
+    parser.add_argument(
+        "--relative-copy-dir",
+        default=None,
+        help="Also write a copy with relative-action stats here (hard-linked data/videos, own meta/)",
+    )
+    parser.add_argument(
+        "--relative-chunk-size", type=int, default=50, help="Action chunk length of the relative-action stats"
+    )
+    parser.add_argument(
+        "--overwrite", action="store_true", help="Delete --output-dir / --relative-copy-dir first if present"
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")

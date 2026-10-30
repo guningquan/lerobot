@@ -65,6 +65,7 @@ class AlohaRos(Robot):
                 gripper_release_margin=config.gripper_release_margin,
                 gripper_effort_threshold=config.gripper_effort_threshold,
                 gripper_current_limit=config.gripper_current_limit,
+                gripper_state_format=config.gripper_state_format,
                 cameras={},  # Cameras are handled at AlohaRos level
             )
 

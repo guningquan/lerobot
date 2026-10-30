@@ -61,7 +61,9 @@ from lerobot.processor import make_default_processors
 from lerobot.processor.pipeline import RobotProcessorPipeline
 from lerobot.robots.aloha_ros import AlohaRos, AlohaRosConfig
 from lerobot.utils.constants import ACTION, OBS_STATE, OBS_STR
-from lerobot.common.control_utils import predict_action
+from lerobot.common.control_utils import predict_action, sanity_check_dataset_robot_compatibility
+from lerobot.datasets.lerobot_dataset import LeRobotDataset
+from lerobot.utils.feature_utils import build_dataset_frame
 from lerobot.utils.keyboard_input import init_keyboard_listener
 from lerobot.utils.device_utils import get_safe_torch_device
 from lerobot.utils.utils import log_say
@@ -253,6 +255,7 @@ def eval_loop(
     save_video: bool = False,
     video_writers: dict[str, cv2.VideoWriter] | None = None,
     episode_index: int = 0,
+    dataset: LeRobotDataset | None = None,
 ):
     """Main evaluation loop that runs policy on robot."""
     policy.reset()
@@ -315,6 +318,14 @@ def eval_loop(
         # Send action to robot
         robot.send_action(act_final)
 
+        # Record the frame (lerobot layout: robot observation + the action sent)
+        if dataset is not None:
+            dataset.add_frame({
+                **build_dataset_frame(dataset.features, obs_processed, prefix=OBS_STR),
+                **build_dataset_frame(dataset.features, act_final, prefix=ACTION),
+                "task": task or "policy evaluation",
+            })
+
         # # Log to rerun if enabled
         # if display_data:
         #     log_rerun_data(obs_processed, act_final, timestamp)
@@ -358,6 +369,13 @@ def main():
     parser.add_argument("--task", default=TASK_DESCRIPTION, help="Language instruction for VLA policies.")
     parser.add_argument("--num_episodes", type=int, default=NUM_EPISODES)
     parser.add_argument("--episode_time_s", type=float, default=EPISODE_TIME_SEC)
+    parser.add_argument(
+        "--dataset_root", default=None,
+        help="Also record the evaluated episodes as a LeRobot v3 dataset here (lerobot layout: AlohaRos "
+        "observations, gripper = normalised joint, videos, + the actions sent). An existing dataset at "
+        "this path is continued. Default: no dataset.",
+    )
+    parser.add_argument("--dataset_repo_id", default="local/aloha_eval", help="repo_id of the recorded dataset.")
     args = parser.parse_args()
     fps = args.fps
     policy_path = args.policy_path
@@ -430,6 +448,32 @@ def main():
             "device_processor": {"device": policy.config.device},
         },
     )
+
+    # Optional dataset of the evaluated episodes
+    dataset = None
+    if args.dataset_root:
+        dataset_features = {
+            **hw_to_dataset_features(puppet.action_features, ACTION),
+            **hw_to_dataset_features(puppet.observation_features, OBS_STR),
+        }
+        image_writer_threads = 4 * len(puppet.cameras) if puppet.cameras else 4
+        if (Path(args.dataset_root) / "meta" / "info.json").exists():
+            dataset = LeRobotDataset.resume(
+                args.dataset_repo_id, root=args.dataset_root, image_writer_threads=image_writer_threads
+            )
+            sanity_check_dataset_robot_compatibility(dataset, puppet, fps, dataset_features)
+            print(f"Continuing dataset {dataset.root} ({dataset.meta.total_episodes} episodes so far)")
+        else:
+            dataset = LeRobotDataset.create(
+                repo_id=args.dataset_repo_id,
+                fps=fps,
+                features=dataset_features,
+                robot_type=puppet.name,
+                use_videos=True,
+                image_writer_threads=image_writer_threads,
+                root=args.dataset_root,
+            )
+            print(f"Recording a new dataset at {dataset.root}")
 
     # Connect the robot (motor setup, then both arms move to the start pose)
     print("\nConnecting to robot and moving to the start pose...")
@@ -532,6 +576,7 @@ def main():
                 save_video=SAVE_VIDEOS,
                 video_writers=video_writers,
                 episode_index=current_episode_num,
+                dataset=dataset,
             )
 
             # Close video writers for this episode
@@ -544,6 +589,8 @@ def main():
             if events["stop_recording"]:
                 # ESC / q during the episode: stop right away (finally: rest pose and power off)
                 print(f"\nEpisode {current_episode_num} stopped (not counted).")
+                if dataset is not None:
+                    dataset.clear_episode_buffer()
                 break
 
             if events["rerecord_episode"]:
@@ -551,9 +598,14 @@ def main():
                 events["rerecord_episode"] = False
                 print(f"\nEpisode {current_episode_num} reset (not counted). Moving robots back to the start pose...")
                 log_say("Reset episode")
+                if dataset is not None:
+                    dataset.clear_episode_buffer()
                 puppet.move_to_start()
                 continue
 
+            if dataset is not None:
+                dataset.save_episode()
+                print(f"Episode saved to the dataset ({dataset.meta.total_episodes} episodes)")
             evaluated_episodes += 1
             print(f"\nEpisode {current_episode_num} completed.")
             if evaluated_episodes < args.num_episodes:
@@ -573,6 +625,9 @@ def main():
         puppet.disconnect()
         if listener:
             listener.stop()
+        if dataset is not None:
+            dataset.finalize()
+            print(f"Dataset saved to: {dataset.root}")
 
 
 if __name__ == "__main__":

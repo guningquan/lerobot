@@ -54,6 +54,12 @@ class AlohaTeleopRos(Teleoperator):
                 move_to_start_on_connect=False,  # both arms move together in move_to_start()
                 start_open_ratio=config.start_open_ratio,
                 release_on_connect=False,  # both arms are released together in connect()
+                release_ramp_s=config.release_ramp_s,
+                relative_on_release=config.relative_on_release,
+                settle_s=config.settle_s,
+                settle_tolerance=config.settle_tolerance,
+                settle_timeout_s=config.settle_timeout_s,
+                max_offset_warn=config.max_offset_warn,
             )
 
         self.left_arm = WidowXRos(arm_config("left", config.left_arm_robot_name, config.init_ros_node))
@@ -74,8 +80,8 @@ class AlohaTeleopRos(Teleoperator):
 
     @cached_property
     def feedback_features(self) -> dict[str, type]:
-        """No feedback features."""
-        return {}
+        """Both arms can be driven to joint positions (see WidowXRos.send_feedback)."""
+        return self.action_features
 
     @property
     def is_connected(self) -> bool:
@@ -116,9 +122,16 @@ class AlohaTeleopRos(Teleoperator):
         self.right_arm.lock()
 
     def unlock(self) -> None:
-        """Release both master arms (torque off) so the operator can move them."""
-        self.left_arm.unlock()
-        self.right_arm.unlock()
+        """Release both master arms (torque off) so the operator can move them; both soften at the
+        same time (see WidowXRos.unlock)."""
+        self._on_both_arms(lambda arm: arm.unlock())
+
+    # enable_torque / disable_torque: the names lerobot's actuated-teleop handover looks for
+    def enable_torque(self) -> None:
+        self.lock()
+
+    def disable_torque(self) -> None:
+        self.unlock()
 
     def move_to_start(self, start_open_ratio: float | None = None) -> None:
         """Move both arms to START_ARM_POSE and park the grippers; they stay locked."""
@@ -147,8 +160,13 @@ class AlohaTeleopRos(Teleoperator):
         return action_dict
 
     def send_feedback(self, feedback: dict[str, float]) -> None:
-        """Master arms don't receive feedback."""
-        raise NotImplementedError("Master arms do not receive feedback.")
+        """Drive both master arms towards "left_*" / "right_*" joint positions (WidowXRos.send_feedback)."""
+        for side, arm in (("left", self.left_arm), ("right", self.right_arm)):
+            arm_feedback = {
+                key.removeprefix(f"{side}_"): value for key, value in feedback.items() if key.startswith(f"{side}_")
+            }
+            if arm_feedback:
+                arm.send_feedback(arm_feedback)
 
     def disconnect(self) -> None:
         """Walk both arms to the rest pose and power them off (unless shutdown() already did)."""

@@ -565,6 +565,9 @@ class DAggerStrategy(RolloutStrategy):
         start_time = time.perf_counter()
         correction_tick = 0
         recorded = 0
+        # Ticks at the start of each correction that are not recorded (see correction_skip_s)
+        correction_skip_ticks = round(self.config.correction_skip_s * cfg.fps * correction_stride)
+        correction_frames = 0
         logger.info("DAgger corrections-only recording started (target: %d episodes)", num_episodes)
 
         with VideoEncodingManager(dataset):
@@ -602,25 +605,29 @@ class DAggerStrategy(RolloutStrategy):
                             # correction episode holds ``fps`` frames per second
                             # whatever the phase the autonomous run left behind.
                             correction_tick = 0
+                            correction_frames = 0
 
                         # Correction ended -> save episode (blocking if not streaming)
                         if old_phase == DAggerPhase.CORRECTING and new_phase == DAggerPhase.PAUSED:
-                            with (
-                                self._pause_for_recording(
-                                    ctx, resume_allowed=events.permits_autonomous_motion
-                                ),
-                                self._episode_lock,
-                            ):
-                                dataset.save_episode()
-                            recorded += 1
-                            self._needs_push.set()
-                            logger.info("Correction %d/%d saved", recorded, num_episodes)
-                            log_say(f"Correction {recorded} saved", play_sounds)
-                            # ``save_episode`` blocks inside the timed loop body: report
-                            # the correction, then drop the partial group and the gap it
-                            # opened, which are finalisation rather than cadence.
-                            timer.log_episode_summary(f"correction {recorded}")
-                            timer.restart()
+                            if correction_frames == 0:
+                                logger.info("Correction ended within correction_skip_s - nothing recorded")
+                            else:
+                                with (
+                                    self._pause_for_recording(
+                                        ctx, resume_allowed=events.permits_autonomous_motion
+                                    ),
+                                    self._episode_lock,
+                                ):
+                                    dataset.save_episode()
+                                recorded += 1
+                                self._needs_push.set()
+                                logger.info("Correction %d/%d saved", recorded, num_episodes)
+                                log_say(f"Correction {recorded} saved", play_sounds)
+                                # ``save_episode`` blocks inside the timed loop body: report
+                                # the correction, then drop the partial group and the gap it
+                                # opened, which are finalisation rather than cadence.
+                                timer.log_episode_summary(f"correction {recorded}")
+                                timer.restart()
 
                     # On-demand upload
                     if events.upload_requested.is_set():
@@ -651,7 +658,8 @@ class DAggerStrategy(RolloutStrategy):
                         with timer.section("telemetry"):
                             self._log_telemetry(obs_processed, processed_teleop, ctx.runtime)
 
-                        if correction_tick % correction_stride == 0:
+                        recording_tick = correction_tick - correction_skip_ticks
+                        if recording_tick >= 0 and recording_tick % correction_stride == 0:
                             with timer.section("record"):
                                 obs_frame = build_dataset_frame(features, obs_processed, prefix=OBS_STR)
                                 action_frame = build_dataset_frame(features, processed_teleop, prefix=ACTION)
@@ -663,6 +671,7 @@ class DAggerStrategy(RolloutStrategy):
                                         "intervention": np.array([True], dtype=bool),
                                     }
                                 )
+                            correction_frames += 1
                         correction_tick += 1
 
                     # --- PAUSED: hold position ---
@@ -773,6 +782,11 @@ class DAggerStrategy(RolloutStrategy):
             if teleop_supports_feedback(teleop):
                 teleop.disable_torque()
 
+            # ease the follower onto the teleop's commands (robots that support it)
+            begin_blend = getattr(robot.inner, "begin_blend", None)
+            if self.config.correction_blend_s > 0 and callable(begin_blend):
+                begin_blend(self.config.correction_blend_s)
+
         elif old_phase == DAggerPhase.CORRECTING and new_phase == DAggerPhase.PAUSED:
             if teleop_supports_feedback(teleop):
                 teleop.enable_torque()
@@ -783,8 +797,8 @@ class DAggerStrategy(RolloutStrategy):
             engine.reset()
             engine.resume()
 
-            # release teleop before resuming the policy
-            if teleop_supports_feedback(teleop):
+            # release teleop before resuming the policy (unless it must stay held, see config)
+            if teleop_supports_feedback(teleop) and self.config.release_teleop_on_resume:
                 teleop.disable_torque()
 
         # Transitions are one-off operator events that run inside the control

@@ -39,3 +39,12 @@ class AlohaTeleopRosConfig(TeleoperatorConfig):
     start_open_ratio: float = 1.0
     # Cut the torque at the end of connect() (see WidowXRosConfig.release_on_connect).
     release_on_connect: bool = True
+    # Soft release of the master arms, see WidowXRosConfig.release_ramp_s.
+    release_ramp_s: float = 0.4
+    # Clutch-style takeover of both master arms and its settle detection, see
+    # WidowXRosConfig.relative_on_release.
+    relative_on_release: bool = False
+    settle_s: float = 0.2
+    settle_tolerance: float = 0.01
+    settle_timeout_s: float = 1.0
+    max_offset_warn: float = 0.25

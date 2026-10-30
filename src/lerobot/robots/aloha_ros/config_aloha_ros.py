@@ -51,6 +51,8 @@ class AlohaRosConfig(RobotConfig):
     gripper_release_margin: float = 0.05
     gripper_effort_threshold: float | None = None
     gripper_current_limit: int | None = 300
+    # Meaning of the observed "*_gripper.pos": "joint" (default) or "aloha2" (see ViperXRosConfig)
+    gripper_state_format: str = "joint"
 
     # Camera configuration (shared between both arms)
     cameras: dict[str, CameraConfig] = field(default_factory=dict)

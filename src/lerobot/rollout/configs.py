@@ -248,6 +248,18 @@ class DAggerStrategyConfig(RolloutStrategyConfig):
     # pose on engage: the handover is already continuous there, and the blocking
     # interpolation only delays the start of the correction.
     smooth_handover: bool = True
+    # Disable the actuated teleop's torque when handing control back to the policy. Set it to
+    # False for leaders that fall under gravity once released (e.g. ALOHA's WidowX masters): they
+    # then stay held where they are while the policy runs, and are only released for a correction.
+    release_teleop_on_resume: bool = True
+    # When a correction starts, ease the follower from the pose it holds onto the teleop's commands
+    # over this many seconds instead of jumping to the first one. Only for robots that provide
+    # `begin_blend(duration_s)` (e.g. aloha_ros); 0 disables it.
+    correction_blend_s: float = 0.0
+    # Leave the first seconds of every correction out of the recording (corrections-only mode),
+    # so the handover transient (leader release, follower blend) is not learned. A correction that
+    # ends within this window records nothing and is not counted.
+    correction_skip_s: float = 0.0
     input_device: str = "keyboard"
     keyboard: DAggerKeyboardConfig = field(default_factory=DAggerKeyboardConfig)
     pedal: DAggerPedalConfig = field(default_factory=DAggerPedalConfig)
@@ -255,6 +267,8 @@ class DAggerStrategyConfig(RolloutStrategyConfig):
     def __post_init__(self):
         if self.input_device not in ("keyboard", "pedal"):
             raise ValueError(f"DAgger input_device must be 'keyboard' or 'pedal', got '{self.input_device}'")
+        if self.correction_blend_s < 0 or self.correction_skip_s < 0:
+            raise ValueError("DAgger correction_blend_s and correction_skip_s must be >= 0")
 
     def requires_streaming_encoding(self) -> bool:
         # Only when the autonomous phase is recorded too; corrections are saved between phases.

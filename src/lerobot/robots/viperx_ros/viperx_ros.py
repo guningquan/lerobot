@@ -53,6 +53,7 @@ except Exception:
 from constants import (
     OLD_PUPPET_SLEEP_POSITION,
     PUPPET_GRIPPER_JOINT_RANGE,
+    PUPPET_GRIPPER_POSITION_NORMALIZE_FN,
     PUPPET_SHUTDOWN_MOVE_TIMES,
     PUPPET_SLEEP_MOVE_TIMES,
     PUPPET_SLEEP_POSITION,
@@ -387,7 +388,11 @@ class ViperXRos(Robot):
         start = time.perf_counter()
         position = self._joint_states().position
         obs_dict: dict[str, Any] = {f"{motor}.pos": float(position[i]) for i, motor in enumerate(ARM_MOTORS)}
-        obs_dict["gripper.pos"] = self.normalize_gripper(float(position[6]))
+        if self.config.gripper_state_format == "aloha2":
+            # Finger position (position[7], metres), normalised exactly like ALOHA2's RealEnv.get_qpos
+            obs_dict["gripper.pos"] = float(PUPPET_GRIPPER_POSITION_NORMALIZE_FN(position[7]))
+        else:
+            obs_dict["gripper.pos"] = self.normalize_gripper(float(position[6]))
         dt_ms = (time.perf_counter() - start) * 1e3
         logger.debug(f"{self} read state: {dt_ms:.1f}ms")
 

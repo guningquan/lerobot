@@ -44,6 +44,24 @@ class WidowXRosConfig(TeleoperatorConfig):
     # by lerobot-record / lerobot-teleoperate, which start reading actions immediately). Scripts
     # that wait for a key press set this to False and call unlock() themselves.
     release_on_connect: bool = True
+    # unlock() lowers the arm motors' position P gain to 0 over this many seconds before cutting
+    # the torque, so the arm's weight passes to the operator's hand gradually instead of the arm
+    # dropping the moment it is released. 0 cuts the torque at once.
+    release_ramp_s: float = 0.4
+    # Clutch-style takeover. When the arm was last driven onto the follower's pose (send_feedback,
+    # e.g. DAgger's pause handover), unlock() waits for the released arm to settle and stores
+    # offset = arm pose - that follower pose; get_action() then returns arm pose - offset for the
+    # six arm joints (the gripper stays absolute), so the follower starts from where it holds and
+    # only follows the operator's motion from there. lock() clears the offset.
+    relative_on_release: bool = False
+    # The arm counts as settled once every joint stayed within `settle_tolerance` rad for
+    # `settle_s` seconds; after `settle_timeout_s` the offset is taken anyway.
+    settle_s: float = 0.2
+    settle_tolerance: float = 0.01
+    settle_timeout_s: float = 1.0
+    # Warn when a joint's offset exceeds this (rad): the leader and follower poses then differ
+    # visibly, so re-align (pause) before fine work.
+    max_offset_warn: float = 0.25
 
     def __post_init__(self) -> None:
         if self.side is None:
@@ -60,3 +78,10 @@ class WidowXRosConfig(TeleoperatorConfig):
             raise ValueError(f"`fps` must be positive, got {self.fps}.")
         if not 0.0 <= self.start_open_ratio <= 1.0:
             raise ValueError(f"`start_open_ratio` must be in [0, 1], got {self.start_open_ratio}.")
+        if self.release_ramp_s < 0:
+            raise ValueError(f"`release_ramp_s` must be >= 0, got {self.release_ramp_s}.")
+        if self.settle_s <= 0 or self.settle_tolerance <= 0 or self.settle_timeout_s < self.settle_s:
+            raise ValueError(
+                "Need settle_s > 0, settle_tolerance > 0 and settle_timeout_s >= settle_s, got "
+                f"{self.settle_s}, {self.settle_tolerance}, {self.settle_timeout_s}."
+            )

@@ -68,6 +68,14 @@ class ViperXRosConfig(RobotConfig):
     # Gripper motor Current_Limit register; None leaves it unchanged.
     gripper_current_limit: int | None = 300
 
+    # Meaning of the observed "gripper.pos":
+    #   "joint"  - gripper joint angle normalised with this arm's calibration (1 = open, ~0.07-0.09 =
+    #              closed empty); what aloha_ros_record.py / lerobot-record store.
+    #   "aloha2" - finger position normalised like ALOHA2's RealEnv (PUPPET_GRIPPER_POSITION_NORMALIZE_FN,
+    #              ~0.31 = open, ~-0.11 = closed); for policies trained on converted ALOHA2 HDF5 data
+    #              (e.g. packaging_lerobot). Actions are the same either way.
+    gripper_state_format: str = "joint"
+
     # Camera configuration (same as ViperX)
     cameras: dict[str, CameraConfig] = field(default_factory=dict)
 
@@ -77,6 +85,8 @@ class ViperXRosConfig(RobotConfig):
             self.side = infer_arm_side(self.robot_name)
         if self.side not in ("left", "right"):
             raise ValueError(f"`side` must be 'left' or 'right', got {self.side!r}.")
+        if self.gripper_state_format not in ("joint", "aloha2"):
+            raise ValueError(f"`gripper_state_format` must be 'joint' or 'aloha2', got {self.gripper_state_format!r}.")
         if self.fps <= 0:
             raise ValueError(f"`fps` must be positive, got {self.fps}.")
         if not 0.0 <= self.start_open_ratio <= 1.0:
