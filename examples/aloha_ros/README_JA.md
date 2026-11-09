@@ -8,12 +8,12 @@
 
 このマシンでのパス（別のマシンでは自分の環境に読み替えてください）：
 
-| 用途 | パス |
-| --- | --- |
-| コード | `/mnt/server_ssd2/Programs_server/lerobot` |
-| LeRobot データセット | `/home/robot/Dataset_and_Checkpoint/lerobot-dataset/` |
-| ALOHA2 の生 hdf5 | `/home/robot/Dataset_and_Checkpoint/dataset/<task_name>/` |
-| デプロイ用モデル | `/home/robot/Dataset_and_Checkpoint/checkpoints/` |
+| 用途                 | パス                                                        |
+| -------------------- | ----------------------------------------------------------- |
+| コード               | `/mnt/server_ssd2/Programs_server/lerobot`                |
+| LeRobot データセット | `/home/robot/Dataset_and_Checkpoint/lerobot-dataset/`     |
+| ALOHA2 の生 hdf5     | `/home/robot/Dataset_and_Checkpoint/dataset/<task_name>/` |
+| デプロイ用モデル     | `/home/robot/Dataset_and_Checkpoint/checkpoints/`         |
 
 ---
 
@@ -21,15 +21,15 @@
 
 データの作り方は 2 通りあります。**学習に使ったデータのルートに合わせて、デプロイ時のパラメータも必ず揃えてください。** 揃っていないと、モデルが受け取るグリッパ状態の意味が学習時と変わり、グリッパがおかしな動きをします。
 
-| | ルート A：LeRobot で直接収録 | ルート B：ALOHA2 hdf5 + 変換 |
-| --- | --- | --- |
-| 収録スクリプト | `aloha_ros_record.py` または `lerobot-record` | act-triple-plus-aloha2 の `record_episodes_aloha2.py` |
-| 出力 | LeRobot v3.0 データセット | `episode_N.hdf5`、これを act-triple の `convert_aloha_hdf5_to_lerobot_v30.py` で v3.0 に変換 |
-| グリッパ状態 | 関節角を [0, 1] に正規化 | ALOHA2 の qpos と同じ正規化 |
-| 追加の特徴量 | なし | `observation.velocity`、`observation.effort` |
-| `aloha_ros_eval.py` | `--data_format lerobot`（デフォルト） | `--data_format aloha2` |
-| `lerobot-rollout` | グリッパ関連の引数は付けない | `--robot.gripper_state_format=aloha2` |
-| 既存の例 | apple_grasping（ACT、30 Hz） | packaging_simple_2（pi05、MolmoAct2、50 Hz） |
+|                       | ルート A：LeRobot で直接収録                      | ルート B：ALOHA2 hdf5 + 変換                                                                     |
+| --------------------- | ------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| 収録スクリプト        | `aloha_ros_record.py` または `lerobot-record` | act-triple-plus-aloha2 の `record_episodes_aloha2.py`                                          |
+| 出力                  | LeRobot v3.0 データセット                         | `episode_N.hdf5`、これを act-triple の `convert_aloha_hdf5_to_lerobot_v30.py` で v3.0 に変換 |
+| グリッパ状態          | 関節角を [0, 1] に正規化                          | ALOHA2 の qpos と同じ正規化                                                                      |
+| 追加の特徴量          | なし                                              | `observation.velocity`、`observation.effort`                                                 |
+| `aloha_ros_eval.py` | `--data_format lerobot`（デフォルト）           | `--data_format aloha2`                                                                         |
+| `lerobot-rollout`   | グリッパ関連の引数は付けない                      | `--robot.gripper_state_format=aloha2`                                                          |
+| 既存の例              | apple_grasping（ACT、30 Hz）                      | packaging_simple_2（pi05、MolmoAct2、50 Hz）                                                     |
 
 アクション（action）のグリッパの意味はどちらのルートでも同じで、正規化した開き具合（0 = 閉、1 = 開）です。アクションはどちらも**絶対**の関節目標値で、これが LeRobot のデフォルトです。本ガイドの学習コマンドはすべて絶対アクションを前提にしています。
 
@@ -224,7 +224,17 @@ rsync -a --info=progress2 /home/robot/Dataset_and_Checkpoint/lerobot-dataset/pac
 
 以下のコマンドは学習用マシンの lerobot 環境で実行し、`--dataset.root` はそのマシン上のパスに置き換えてください。
 
-### 8.1 ACT（ルート A の例）
+### 8.1 事前学習済み重みの指定方法
+
+以下の節に ACT、pi0 / pi0.5、MolmoAct2、GR00T のコマンドを載せています。このうちこのマシンで学習・デプロイしたのは ACT、pi0.5、MolmoAct2 です。23 種類すべてのアルゴリズムのデフォルト設定と重みの指定方法は、文末の付録を参照してください。
+
+pi0 / pi0.5 は `pretrained_path`、MolmoAct2 は `checkpoint_path` を使いますが、どちらも「事前学習済みの重みから始める」という意味で、違いは重みの保存形式です：
+
+- **`--policy.pretrained_path`**：すべてのポリシー共通で、**LeRobot 形式**の checkpoint（`config.json` + `model.safetensors`）を指します。`lerobot/pi0_base`、`lerobot/pi05_base` は LeRobot がこの形式に変換した公式の base モデルです。`--policy.type` と一緒に使うと、設定はコマンドとデータセットから新しく作られ（カメラ名や関節数はデータセットから読む）、ここからは重みだけを読み込みます。
+- **`--policy.checkpoint_path`**：MolmoAct2 独自のフィールドです。MolmoAct2 には LeRobot 形式の base モデルがないため、このフィールドは AllenAI が公開している元の transformers 形式の重みを指し、モデルを構築するたびにモデル自身が読み込みます（デプロイ時も同じで、このマシンには `allenai/MolmoAct2` がキャッシュ済み）。そのため MolmoAct2 の学習時には `pretrained_path` は空で、LeRobot から見ると新規に作ったポリシーであり、事前学習の能力は `checkpoint_path` から来ます。ACT の ImageNet バックボーンも同じ種類で、モデル自身のフィールドで読み込まれます。
+- **`--policy.path`**：設定と重みの両方を 1 つの checkpoint から読み、コマンドでは学習パラメータだけを変えます。自分で学習したモデルからの続きの学習（10 章）とデプロイに使います。公式の base モデルから始めるとき、pi0 / pi0.5 の公式ドキュメントは `--policy.type` + `--policy.pretrained_path` を使い、設定はデータセットから新しく作って重みだけを借ります。一方で、smolvla や xvla などのように公式ドキュメントが `--policy.path=<base モデル>` と直接書いているアルゴリズムもあります（付録参照）。
+
+### 8.2 ACT（ルート A の例）
 
 ```bash
 lerobot-train \
@@ -234,7 +244,9 @@ lerobot-train \
   --steps=100000 --batch_size=8 --save_freq=10000 --wandb.enable=false
 ```
 
-### 8.2 pi0.5（ルート B）
+### 8.3 pi0 / pi0.5（ルート B）
+
+pi0.5：
 
 ```bash
 lerobot-train \
@@ -248,9 +260,11 @@ lerobot-train \
   --wandb.enable=false
 ```
 
+pi0：`--policy.type=pi05 --policy.pretrained_path=lerobot/pi05_base` を `--policy.type=pi0 --policy.pretrained_path=lerobot/pi0_base` に置き換え、`--output_dir`、`--job_name` も別の名前にします。それ以外は同じです。
+
 batch 32 のフルファインチューニングには大容量 VRAM の GPU が必要で、3090 のような 24 GB の GPU では足りません。
 
-### 8.3 MolmoAct2（ルート B）
+### 8.4 MolmoAct2（ルート B）
 
 ```bash
 lerobot-train \
@@ -264,9 +278,39 @@ lerobot-train \
   --output_dir=outputs/molmoact2_packaging --job_name=molmoact2_packaging --wandb.enable=false
 ```
 
-### 8.4 学習結果と学習の再開
+`--policy.image_keys` でモデルに入力するカメラを指定します。
+
+### 8.5 GR00T（ルート B）
+
+GR00T N1.7 は NVIDIA の VLA です。このマシンの venv にはまだ必要なパッケージ（decord、timm、diffusers）が入っていないので、先に 2.2 節の `uv sync` に `--extra groot` を追加してください。
+
+```bash
+lerobot-train \
+  --dataset.repo_id=local/packaging_simple_2_v30 --dataset.root=/path/to/packaging_simple_2_v30 \
+  --dataset.image_transforms.enable=true \
+  --policy.type=groot --policy.base_model_path=nvidia/GR00T-N1.7-3B \
+  --policy.embodiment_tag=new_embodiment \
+  --policy.chunk_size=40 --policy.n_action_steps=40 \
+  --policy.use_bf16=true --policy.max_steps=20000 \
+  --policy.device=cuda --policy.push_to_hub=false \
+  --batch_size=64 --steps=20000 --save_freq=5000 \
+  --output_dir=outputs/groot_packaging --job_name=groot_packaging --wandb.enable=false
+```
+
+- `--policy.base_model_path`：NVIDIA の元の形式の base モデルで、MolmoAct2 の `checkpoint_path` と同じ種類です（LeRobot 形式ではないので `pretrained_path` は使いません）。モデルを構築するたびに最初にこれを読み込み、デプロイ時も同じなので、ロボットの PC から `nvidia/GR00T-N1.7-3B` をダウンロードできるか、キャッシュ済みである必要があります。
+- `--policy.embodiment_tag=new_embodiment`：GR00T は embodiment ごとにアクションヘッドと正規化の統計を分けます。自分のロボットには `new_embodiment` を使い、公式の SO-101 の例もこう書いています。
+- 正規化は GR00T 自身が行い（データセット統計の q01/q99 で min-max）、LeRobot の正規化は通らないので、7 章の変換スクリプトが計算した正確な分位点をそのまま使えます。
+- デフォルトでは射影層、アクションヘッド（DiT）、VLLN だけを学習し、LLM と画像エンコーダは凍結したままです（`--policy.tune_llm`、`--policy.tune_visual` のデフォルトはどちらも false）。
+- `--policy.max_steps` は warmup のステップ数（5%）の計算にだけ使うので、`--steps` と同じ値にします。
+- アクションチャンク 40 はデフォルト値で、`new_embodiment` でのモデルのアクション horizon も 40、50 Hz で約 0.8 秒です。公式の SO-101（30 Hz）の例では 16 を使っています。
+- `--batch_size=64` は公式の例に合わせています。VRAM が足りなければ小さくしてください。
+- デプロイは他のモデルと同じく `aloha_ros_eval.py --data_format aloha2`、または `lerobot-rollout` に `--robot.gripper_state_format=aloha2` を付けます。GR00T には `--task` が必須です。
+- このコマンドは `lerobot-train` で正しく解析できることだけ確認しており、このマシンではまだ GR00T を学習・デプロイしていません。
+
+### 8.6 学習結果と学習の再開
 
 - checkpoint は `<output_dir>/checkpoints/<ステップ数>/pretrained_model/` にあります（`last` は最新のものを指します）。デプロイに必要なのは `pretrained_model` ディレクトリだけなので、それをロボットにコピーします：
+
   ```bash
   rsync -a server:/path/outputs/pi05_xxx/checkpoints/020000/pretrained_model/ \
     /home/robot/Dataset_and_Checkpoint/checkpoints/pi05_xxx_020000/
@@ -274,6 +318,7 @@ lerobot-train \
 
   `.tar.gz` にまとめて転送した場合は、展開する前に `gzip -t xxx.tar.gz` でファイルが完全か確認してください（ダウンロードが途中で切れたアーカイブでも一部のファイルは一覧に出ますが、展開すると `Unexpected EOF` になります）。
 - 中断した学習の再開：
+
   ```bash
   lerobot-train --config_path=outputs/<job>/checkpoints/last/pretrained_model/train_config.json --resume=true
   ```
@@ -284,11 +329,11 @@ lerobot-train \
 
 入口は 2 つあります：
 
-| | `aloha_ros_eval.py` | `lerobot-rollout` |
-| --- | --- | --- |
-| 推論方式 | 同期（chunk を実行し終えてから次を推論） | 同期、または RTC |
-| キー操作 | → / ← / ESC、エピソード単位で実行 | strategy による（9.2 参照） |
-| データ記録 | 任意（`--dataset_root`） | episodic、dagger は記録必須 |
+|            | `aloha_ros_eval.py`                    | `lerobot-rollout`         |
+| ---------- | ---------------------------------------- | --------------------------- |
+| 推論方式   | 同期（chunk を実行し終えてから次を推論） | 同期、または RTC            |
+| キー操作   | → / ← / ESC、エピソード単位で実行      | strategy による（9.2 参照） |
+| データ記録 | 任意（`--dataset_root`）               | episodic、dagger は記録必須 |
 
 ### 9.1 `aloha_ros_eval.py`（同期、普段の評価におすすめ）
 
@@ -303,11 +348,11 @@ python examples/aloha_ros/aloha_ros_eval.py --fps 30 --policy_path $CKPT --num_e
 
 キー操作（スクリプトを実行しているターミナルで押す）：
 
-| キー | 動作 |
-| --- | --- |
-| →（または `n`） | 開始姿勢で待機中：このエピソードを開始。実行中：早めに終了（完了扱い） |
-| ←（または `r`） | このエピソードを破棄し、開始姿勢に戻ってやり直し。`--num_episodes` には数えない |
-| ESC（または `q`） | 終了：アームが 2 段階でレスト姿勢に戻って電源オフ |
+| キー                | 動作                                                                              |
+| ------------------- | --------------------------------------------------------------------------------- |
+| →（または `n`）  | 開始姿勢で待機中：このエピソードを開始。実行中：早めに終了（完了扱い）            |
+| ←（または `r`）  | このエピソードを破棄し、開始姿勢に戻ってやり直し。`--num_episodes` には数えない |
+| ESC（または `q`） | 終了：アームが 2 段階でレスト姿勢に戻って電源オフ                                 |
 
 - 実行中は 1 行のプログレスバー（経過秒数と直近の推論時間）だけが表示されます。
 - 起動時に 1 回ウォームアップの推論を行います（pi05 で約 10〜20 秒）。その後の通常の推論は約 0.2 秒（3090）です。同期推論では chunk を実行し終えるたびに推論待ちで一瞬止まりますが、これは正常です。連続した動きにしたい場合は 9.3 の RTC を使います。
@@ -318,12 +363,12 @@ python examples/aloha_ros/aloha_ros_eval.py --fps 30 --policy_path $CKPT --num_e
 
 ### 9.2 `lerobot-rollout` のモード
 
-| `--strategy.type` | 操作方法 | データ記録 |
-| --- | --- | --- |
-| `base` | キー操作なし。`--duration` 秒経過するか Ctrl+C で終了 | しない |
-| `base` + `--interactive=true` | ターミナルに `/start` で開始、`/reset` で停止して初期姿勢へ、`/stop` で終了 | しない |
-| `episodic` | → でこのエピソードまたはリセット期間を早めに終了、← で破棄して撮り直し、ESC で終了 | 必須 |
-| `dagger` | キーボードまたはフットペダルで人が介入（10 章参照） | 必須、リーダーアームが必要 |
+| `--strategy.type`               | 操作方法                                                                             | データ記録                 |
+| --------------------------------- | ------------------------------------------------------------------------------------ | -------------------------- |
+| `base`                          | キー操作なし。`--duration` 秒経過するか Ctrl+C で終了                              | しない                     |
+| `base` + `--interactive=true` | ターミナルに `/start` で開始、`/reset` で停止して初期姿勢へ、`/stop` で終了    | しない                     |
+| `episodic`                      | → でこのエピソードまたはリセット期間を早めに終了、← で破棄して撮り直し、ESC で終了 | 必須                       |
+| `dagger`                        | キーボードまたはフットペダルで人が介入（10 章参照）                                  | 必須、リーダーアームが必要 |
 
 - データを記録するモードでは、`--dataset.repo_id` の名前を `rollout_` で始める必要があります。
 - 既存のデータセットに追加で記録するときは `--resume=true` を付けます。カメラと fps は元のデータセットと同じでなければなりません。
@@ -343,7 +388,7 @@ lerobot-rollout --strategy.type=base \
 
 **オプション**：RTC を使わなくても普通に動きます（9.1、9.2 はどちらも同期推論）。pi05 のように推論が遅いモデルで、chunk 間の停止が気になる場合にだけ使います。
 
-論文：Kevin Black, Manuel Y. Galliker, Sergey Levine. *Real-Time Execution of Action Chunking Flow Policies*, 2025. <https://arxiv.org/abs/2506.07339>（Physical Intelligence の紹介ページ：<https://www.physicalintelligence.company/research/real_time_chunking>）
+論文：Kevin Black, Manuel Y. Galliker, Sergey Levine. *Real-Time Execution of Action Chunking Flow Policies*, 2025. [https://arxiv.org/abs/2506.07339](https://arxiv.org/abs/2506.07339)（Physical Intelligence の紹介ページ：[https://www.physicalintelligence.company/research/real_time_chunking](https://www.physicalintelligence.company/research/real_time_chunking)）
 
 RTC は次の chunk をバックグラウンドで先に計算し、新しい chunk の先頭を前の軌道に滑らかにつなげるので、実行中に止まりません。`lerobot-rollout` でのみ使えます。以下はキー操作ありでデータも記録する episodic 版です：
 
@@ -375,14 +420,14 @@ lerobot-rollout --strategy.type=episodic \
 
 ポリシーが自律で動き、失敗しそうになったら人がリーダーアームで介入して修正し、その修正区間を学習データに加えて学習し直します。方法は 2 通りあり、**どちらも使え、混ぜて使うこともできます**：
 
-| | 方法 A：`lerobot-rollout` の dagger | 方法 B：act-triple の `hil_rollout.py` |
-| --- | --- | --- |
-| 改善したいモデル | LeRobot で学習した checkpoint（pi05、MolmoAct2、ACT）、このマシンの GPU で推論 | openpi または N0-VTLA のモデル、サーバーの `serve_policy.py` で推論 |
-| 実行環境 | 本リポジトリの venv | act-triple の conda 環境 `aloha` |
-| 記録する範囲 | 修正区間だけ、修正 1 回 = 1 エピソード | エピソード全体を記録し、各フレームに phase / intervention ラベルを付け、後で切り出す |
-| データ形式 | LeRobot v3.0 データセット（`rollout_*`） | ALOHA2 の生 hdf5（N0 は VTLA ディレクトリ） |
-| 学習に使える先 | LeRobot のみ | LeRobot、ACT（act-triple）、openpi のどれでも |
-| LeRobot 学習用データセットへの追加 | `merge_hil_into_lerobot_v30.py`（10.1） | `hil_split_episodes.py` で修正区間を切り出し、`convert_aloha_hdf5_to_lerobot_v30.py` でデモと一緒に変換（10.2） |
+|                                    | 方法 A：`lerobot-rollout` の dagger                                          | 方法 B：act-triple の `hil_rollout.py`                                                                            |
+| ---------------------------------- | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------- |
+| 改善したいモデル                   | LeRobot で学習した checkpoint（pi05、MolmoAct2、ACT）、このマシンの GPU で推論 | openpi または N0-VTLA のモデル、サーバーの `serve_policy.py` で推論                                               |
+| 実行環境                           | 本リポジトリの venv                                                            | act-triple の conda 環境 `aloha`                                                                                  |
+| 記録する範囲                       | 修正区間だけ、修正 1 回 = 1 エピソード                                         | エピソード全体を記録し、各フレームに phase / intervention ラベルを付け、後で切り出す                                |
+| データ形式                         | LeRobot v3.0 データセット（`rollout_*`）                                     | ALOHA2 の生 hdf5（N0 は VTLA ディレクトリ）                                                                         |
+| 学習に使える先                     | LeRobot のみ                                                                   | LeRobot、ACT（act-triple）、openpi のどれでも                                                                       |
+| LeRobot 学習用データセットへの追加 | `merge_hil_into_lerobot_v30.py`（10.1）                                      | `hil_split_episodes.py` で修正区間を切り出し、`convert_aloha_hdf5_to_lerobot_v30.py` でデモと一緒に変換（10.2） |
 
 選び方：改善したいのが LeRobot で学習したモデルなら方法 A、openpi / N0 のモデルなら方法 B です。DAgger の修正はそのとき動いていたモデルの失敗に対するものなので、同じモデルの学習に使うのが最も効果的です。別のモデルの学習に使っても有効なデモデータにはなりますが、そのモデル自身の失敗を修正したものではありません。方法 B のデータは生の形式なので、後でどのフレームワークにも使えます。方法 A のデータは LeRobot でしか使えず、hdf5 に戻すツールはありません。
 
@@ -394,13 +439,13 @@ lerobot-rollout --strategy.type=episodic \
 
 介入方式には 2 つのバージョンがあり、違いは「修正開始」の瞬間にリーダーとフォロワーをどう引き継ぐかだけです：
 
-| | バージョン 1：変更前（非クラッチ、フォロワーをブレンド） | バージョン 2：変更後（クラッチ式） |
-| --- | --- | --- |
-| リーダーの解放 | 0.6 秒かけて柔らかくしてからトルクオフ | 0.3 秒かけて柔らかくしてからトルクオフし、リーダーが静止するのを待つ（最大 1 秒） |
-| フォロワーの追従 | 0.3 秒かけて保持していた姿勢からリーダーの**絶対**位置へブレンド | リーダーとフォロワーの差分を記録し、「リーダー − 差分」に追従 |
-| 手を添えたリーダーが沈んだとき | フォロワーもリーダーの位置まで沈み、少し動く | 差分が沈み込みを打ち消すので、フォロワーは動かない |
-| 記録しない先頭区間 | 0.5 秒 | 0.2 秒 |
-| 主なパラメータ | `correction_blend_s=0.3`、`correction_skip_s=0.5`、`release_ramp_s=0.6` | `relative_on_release=true`、`correction_blend_s=0`、`correction_skip_s=0.2`、`release_ramp_s=0.3` |
+|                                | バージョン 1：変更前（非クラッチ、フォロワーをブレンド）                      | バージョン 2：変更後（クラッチ式）                                                                        |
+| ------------------------------ | ----------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| リーダーの解放                 | 0.6 秒かけて柔らかくしてからトルクオフ                                        | 0.3 秒かけて柔らかくしてからトルクオフし、リーダーが静止するのを待つ（最大 1 秒）                         |
+| フォロワーの追従               | 0.3 秒かけて保持していた姿勢からリーダーの**絶対**位置へブレンド        | リーダーとフォロワーの差分を記録し、「リーダー − 差分」に追従                                            |
+| 手を添えたリーダーが沈んだとき | フォロワーもリーダーの位置まで沈み、少し動く                                  | 差分が沈み込みを打ち消すので、フォロワーは動かない                                                        |
+| 記録しない先頭区間             | 0.5 秒                                                                        | 0.2 秒                                                                                                    |
+| 主なパラメータ                 | `correction_blend_s=0.3`、`correction_skip_s=0.5`、`release_ramp_s=0.6` | `relative_on_release=true`、`correction_blend_s=0`、`correction_skip_s=0.2`、`release_ramp_s=0.3` |
 
 どちらのバージョンでも記録されるデータの形式は同じなので、同じデータセットに記録できます。2 つの介入方式の効果を比べたい場合は、`--dataset.root` を分けてください。既存の HIL データセットに追加で記録するときは `--resume=true` を付けます。
 
@@ -448,14 +493,14 @@ lerobot-rollout --strategy.type=dagger --strategy.record_autonomous=false \
 4. 修正が終わったら **← で修正終了**：この区間が 1 エピソードとして保存されます。
 5. **→ でポリシーに戻す**と、自律動作を再開します。ESC でセッション全体を終了します。
 
-| パラメータ | 役割 |
-| --- | --- |
-| `--teleop.relative_on_release` | `true` = クラッチ式（バージョン 2）：リーダーを解放して静止するのを待ってから、リーダーとフォロワーの差分を記録し、フォロワーは「リーダー − 差分」に追従。付けない（デフォルト `false`）= バージョン 1 で、フォロワーはリーダーの絶対位置にそのまま追従 |
-| `--teleop.release_ramp_s` | この時間をかけてリーダーの位置ゲインを 0 まで下げてからトルクを切り、急に脱力しないようにする |
-| `--strategy.correction_blend_s` | 修正開始時にフォロワーをリーダーの位置へブレンドする時間。バージョン 1 ではこれでフォロワーの急な跳びを防ぐ。クラッチ式ではフォロワーはもともと動かないので 0 |
-| `--strategy.correction_skip_s` | 各修正の先頭のこの秒数は記録しない（引き継ぎ時の過渡的な動きを避けるため）。これより短い修正は保存もカウントもされない |
-| `--strategy.release_teleop_on_resume=false` | ポリシーに戻した後もリーダーをロックしたままにし、トルクオフで落下しないようにする |
-| `--strategy.num_episodes` | この回数の修正を記録したら自動で終了 |
+| パラメータ                                    | 役割                                                                                                                                                                                                                                                         |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `--teleop.relative_on_release`              | `true` = クラッチ式（バージョン 2）：リーダーを解放して静止するのを待ってから、リーダーとフォロワーの差分を記録し、フォロワーは「リーダー − 差分」に追従。付けない（デフォルト `false`）= バージョン 1 で、フォロワーはリーダーの絶対位置にそのまま追従 |
+| `--teleop.release_ramp_s`                   | この時間をかけてリーダーの位置ゲインを 0 まで下げてからトルクを切り、急に脱力しないようにする                                                                                                                                                                |
+| `--strategy.correction_blend_s`             | 修正開始時にフォロワーをリーダーの位置へブレンドする時間。バージョン 1 ではこれでフォロワーの急な跳びを防ぐ。クラッチ式ではフォロワーはもともと動かないので 0                                                                                                |
+| `--strategy.correction_skip_s`              | 各修正の先頭のこの秒数は記録しない（引き継ぎ時の過渡的な動きを避けるため）。これより短い修正は保存もカウントもされない                                                                                                                                       |
+| `--strategy.release_teleop_on_resume=false` | ポリシーに戻した後もリーダーをロックしたままにし、トルクオフで落下しないようにする                                                                                                                                                                           |
+| `--strategy.num_episodes`                   | この回数の修正を記録したら自動で終了                                                                                                                                                                                                                         |
 
 #### 記録の後：データ処理と学習
 
@@ -491,6 +536,7 @@ python aloha_scripts/merge_hil_into_lerobot_v30.py \
     --batch_size=32 --steps=5000 --save_freq=1000 \
     --output_dir=outputs/pi05_packaging_hil --job_name=pi05_packaging_hil --wandb.enable=false
   ```
+
   `--policy.path` で既存モデルの重みから始め、正規化の統計は新しいデータセットのものに自動で置き換わります。ここで `--resume=true` は使わないでください。これは元の学習を元のデータセットのまま再開するためのものです。既存モデルの入力に velocity/effort があり新しいデータセットにはなくても学習でき、この流れは ACT で実際に確認済みです。
 
 ### 10.2 方法 B：act-triple の `hil_rollout.py`（openpi / N0 のモデル）
@@ -579,13 +625,57 @@ python examples/aloha_ros/aloha_scripts/sleep_modify.py --shut_down_puppet  # �
 
 ## 12. よくある問題
 
-| 症状 | 原因と対処 |
-| --- | --- |
-| `Couldn't parse '' into an int` | `$FPS`、`$CAMS` などの変数が今のターミナルで空になっている。2.4 に従って設定し直す |
-| `No module named 'rospkg'` | `uv sync` で ROS の依存パッケージが削除された。`uv pip install rospkg catkin_pkg netifaces h5py` を再実行 |
-| グリッパの動きがおかしい（開くべきときに開かない、閉じるべきときに閉じない） | データのルートとデプロイ時のパラメータが合っていない（0 章参照）。またはキャリブレーションが変わった |
-| 同期推論で毎秒一瞬止まる | 正常。chunk を実行し終えるたびに推論を待つため。連続した動きにしたければ RTC を選択 |
-| RTC で周期的に跳ねる | `execution_horizon` が小さすぎる。9.3 参照 |
-| `--resume=true` での追加記録に失敗する | カメラまたは fps が既存のデータセットと違う。`CAMS` にはデータセットにあるカメラをすべて書く |
-| `.tar.gz` の展開で `Unexpected EOF` | ダウンロードが不完全。ダウンロードし直し、先に `gzip -t` で確認する |
-| 起動時の `Please set the gripper's 'operating mode'` | Interbotix のメッセージなので無視してよい |
+| 症状                                                                         | 原因と対処                                                                                                    |
+| ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `Couldn't parse '' into an int`                                            | `$FPS`、`$CAMS` などの変数が今のターミナルで空になっている。2.4 に従って設定し直す                        |
+| `No module named 'rospkg'`                                                 | `uv sync` で ROS の依存パッケージが削除された。`uv pip install rospkg catkin_pkg netifaces h5py` を再実行 |
+| グリッパの動きがおかしい（開くべきときに開かない、閉じるべきときに閉じない） | データのルートとデプロイ時のパラメータが合っていない（0 章参照）。またはキャリブレーションが変わった          |
+| 同期推論で毎秒一瞬止まる                                                     | 正常。chunk を実行し終えるたびに推論を待つため。連続した動きにしたければ RTC を選択                           |
+| RTC で周期的に跳ねる                                                         | `execution_horizon` が小さすぎる。9.3 参照                                                                  |
+| `--resume=true` での追加記録に失敗する                                     | カメラまたは fps が既存のデータセットと違う。`CAMS` にはデータセットにあるカメラをすべて書く                |
+| `.tar.gz` の展開で `Unexpected EOF`                                      | ダウンロードが不完全。ダウンロードし直し、先に `gzip -t` で確認する                                         |
+| 起動時の `Please set the gripper's 'operating mode'`                       | Interbotix のメッセージなので無視してよい                                                                     |
+
+---
+
+## 付録：LeRobot のアルゴリズム別設定一覧
+
+`src/lerobot/policies/` には 23 種類のアルゴリズムが登録されており、どれも `lerobot-train --policy.type=<名前>` で選びます。下表のデフォルト値は各アルゴリズムの設定コードから直接読み取ったもの（`lerobot` 0.7.x）で、事前学習済み重みの指定方法は `docs/source/` にある各アルゴリズムの公式ドキュメントに基づいています。重みの 3 通りの指定方法は 8.1 を参照してください。
+
+| アルゴリズム       | 種類                                              | 事前学習済み重みの指定方法                                                                                                                                                                       | デフォルトのアクションチャンク / 1 回の実行ステップ数 | デフォルトの正規化（state、action） | デフォルトの学習率 | 必要な extra       | このマシンでの状況                      |
+| ------------------ | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------- | ----------------------------------- | ------------------ | ------------------ | --------------------------------------- |
+| `act`            | 模倣学習（Transformer + CVAE）                    | ポリシー全体の事前学習済み重みは読み込まない。ResNet18 バックボーンはデフォルトで ImageNet の重み（`--policy.pretrained_backbone_weights`）                                                    | 100 / 100                                             | MEAN_STD                            | 1e-5               | なし               | apple タスクで学習・デプロイ済み        |
+| `diffusion`      | 模倣学習（拡散ポリシー）                          | ACT と同じく ResNet18 バックボーンに ImageNet の重み                                                                                                                                             | 64 / 32                                               | MIN_MAX                             | 1e-4               | `diffusion`      | 未確認                                  |
+| `dm05`           | VLA（Dexmal DM0.5）                               | `--policy.path=lerobot/dm05_base`                                                                                                                                                              | 50 / 50                                               | QUANTILES                           | 2.5e-5             | `dm05`           | 未確認                                  |
+| `eo1`            | VLA（Qwen2.5-VL バックボーン）                    | `--policy.path=lerobot/eo1-base`                                                                                                                                                               | 16 / 16                                               | MEAN_STD                            | 1e-4               | `eo1`            | 未確認                                  |
+| `evo1`           | VLA（InternVL3 バックボーン + flow matching）     | `--policy.type=evo1`。VLM バックボーンは `--policy.vlm_model_name` で読み込む（デフォルト `OpenGVLab/InternVL3-1B-hf`）                                                                    | 50 / 50                                               | MIN_MAX                             | 1e-5               | `evo1`           | 未確認                                  |
+| `fastwam`        | 世界行動モデル（Wan2.2 動画モデル）               | `--policy.type=fastwam`。base は `--policy.base_model_id` で読み込む（デフォルト `lerobot/fastwam_base`）                                                                                  | 32 / 32                                               | MEAN_STD                            | 1e-4               | `fastwam`        | 未確認                                  |
+| `fineart_vla`    | VLA（pi0.5 に言語ヘッドを追加）                   | `--policy.path=lerobot/fineart_vla_base`                                                                                                                                                       | 50 / 50                                               | QUANTILES                           | 2.5e-5             | `fineart_vla`    | 未確認                                  |
+| `flux3`          | 動画 latent + アクションの拡散 Transformer        | 公式 checkpoint から始める：`--policy.path=black-forest-labs/flux-3-action-droid`（または `-so101`）                                                                                         | 32 / 32                                               | IDENTITY                            | 1e-4               | `flux3`          | 未確認                                  |
+| `gaussian_actor` | 強化学習（HIL-SERL の SAC actor）                 | 通常の模倣学習には使わない。`docs/source/hilserl.mdx` を参照                                                                                                                                   | —                                                    | MIN_MAX                             | —                 | —                 | 未確認                                  |
+| `groot`          | VLA（NVIDIA GR00T）                               | `--policy.type=groot --policy.base_model_path=nvidia/GR00T-N1.7-3B`（これがデフォルト値）                                                                                                      | 40 / 40                                               | IDENTITY                            | 1e-4               | `groot`          | コマンドが解析できることだけ確認（8.5） |
+| `lawam`          | 潜在空間の世界行動モデル（Qwen3-VL バックボーン） | `--policy.path=jialei02/lawam-pretrain-lerobot`                                                                                                                                                | 50 / 8                                                | MIN_MAX                             | 1e-4               | `lawam`          | 未確認                                  |
+| `lingbot_va`     | 自己回帰型の動画・行動世界モデル（Wan2.2）        | `--policy.type=lingbot_va`。base は `--policy.wan_pretrained_path` で読み込む（デフォルト `robbyant/lingbot-va-base`）                                                                     | 16 / 16                                               | IDENTITY                            | 1e-5               | `lingbot_va`     | 未確認                                  |
+| `molmoact2`      | VLA（AllenAI）                                    | `--policy.checkpoint_path=allenai/MolmoAct2`（これがデフォルト値）                                                                                                                             | 30 / 30                                               | QUANTILES                           | 1e-5               | `molmoact2`      | packaging で学習・デプロイ済み          |
+| `multi_task_dit` | マルチタスク拡散 Transformer                      | ポリシー全体の事前学習済み重みは読み込まない。画像・テキストのエンコーダは CLIP（`--policy.vision_encoder_name`、`--policy.text_encoder_name`、デフォルト `openai/clip-vit-base-patch16`） | 32 / 24                                               | MIN_MAX                             | 2e-5               | `multi_task_dit` | 未確認                                  |
+| `pi0`            | VLA（Physical Intelligence）                      | `--policy.pretrained_path=lerobot/pi0_base`                                                                                                                                                    | 50 / 50                                               | MEAN_STD                            | 2.5e-5             | `pi`             | コマンドが解析できることだけ確認        |
+| `pi0_fast`       | VLA（pi0 の FAST アクショントークン版）           | `--policy.pretrained_path=lerobot/pi0fast-base`                                                                                                                                                | 50 / 50                                               | MEAN_STD                            | 2.5e-5             | `pi`             | 未確認                                  |
+| `pi05`           | VLA（Physical Intelligence）                      | `--policy.pretrained_path=lerobot/pi05_base`                                                                                                                                                   | 50 / 50                                               | QUANTILES                           | 2.5e-5             | `pi`             | packaging で学習・デプロイ済み          |
+| `smolvla`        | 小型 VLA（SmolVLM2 バックボーン）                 | `--policy.path=lerobot/smolvla_base`                                                                                                                                                           | 50 / 50                                               | MEAN_STD                            | 1e-4               | `smolvla`        | 未確認                                  |
+| `tdmpc`          | 強化学習（TD-MPC、モデルベース）                  | 事前学習済み重みはなく、主にシミュレーションでのオンライン強化学習用                                                                                                                             | 5 / 1                                                 | アクション MIN_MAX                  | 3e-4               | なし               | 未確認                                  |
+| `vla_jepa`       | VLA + V-JEPA2 動画世界モデル                      | `--policy.path=lerobot/VLA-JEPA-Pretrain`。ロボットが変わるときは `--policy.reinit_modules` でアクションエンコーダなどを初期化し直す                                                         | 7 / 7                                                 | MEAN_STD、MIN_MAX                   | 1e-4               | `vla_jepa`       | 未確認                                  |
+| `vqbet`          | 模倣学習（VQ-BeT）                                | ACT と同じく ResNet18 バックボーンに ImageNet の重み                                                                                                                                             | 5（`action_chunk_size`）                            | MIN_MAX                             | 1e-4               | なし               | 未確認                                  |
+| `wall_x`         | VLA（WALL-OSS）                                   | `--policy.type=wall_x --policy.pretrained_name_or_path=x-square-robot/wall-oss-flow`（これがデフォルト値）                                                                                     | 32 / 32                                               | MEAN_STD                            | 2e-5               | `wallx`          | 未確認                                  |
+| `xvla`           | VLA（soft prompt）                                | `--policy.path=lerobot/xvla-base`                                                                                                                                                              | 32 / 32                                               | IDENTITY                            | 1e-4               | `xvla`           | 未確認                                  |
+
+- 「事前学習済み重みの指定方法」の列は、各アルゴリズムの公式ドキュメントのやり方です。`--policy.path` と書いてあるアルゴリズムは、設定もその checkpoint から読みます。カメラ名や関節数が自分のデータセットと違う場合は、各ドキュメントに従って `--rename_map` などで合わせる必要があります。この点はこのマシンでは確認していません。
+- 必要な extra は 2.2 節の `uv sync` に追加します（例：`--extra smolvla`）。
+- アルゴリズムを変えても、デプロイ側のデータ形式のルールは同じです：ルート B のデータで学習したモデルは、`aloha_ros_eval.py` では `--data_format aloha2`、`lerobot-rollout` では `--robot.gripper_state_format=aloha2` を付けます。
+
+`policies/` にはほかに、学習できるアルゴリズムではないディレクトリが 4 つあります：
+
+| ディレクトリ      | 内容                                                                                                                                                                            |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `common`        | 各アルゴリズムで共有するコード（flow matching、VLA 用のユーティリティ）                                                                                                         |
+| `rtc`           | 推論時のリアルタイムチャンキング（RTC）モジュール。pi0、pi0.5 などが使う（9.3 参照）                                                                                            |
+| `sac`、`sarm` | `__pycache__` だけが残った古いディレクトリ。コードは `lerobot/rl/algorithms/sac` と `lerobot/rewards/sarm` に移っており、この 2 つは git の管理外なので削除して構いません |

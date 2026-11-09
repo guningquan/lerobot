@@ -21,15 +21,15 @@
 
 数据有两种来源，**训练时用的是哪条路线的数据，部署时就必须用对应的参数**，否则模型看到的夹爪状态含义和训练时不一样，夹爪会乱动。
 
-|                       | 路线 A：LeRobot 直接录                        | 路线 B：ALOHA2 hdf5 + 转换                                                  |
-| --------------------- | --------------------------------------------- | --------------------------------------------------------------------------- |
-| 录制脚本              | `aloha_ros_record.py` 或 `lerobot-record` | act-triple-plus-aloha2 的 `record_episodes_aloha2.py`                     |
+|                       | 路线 A：LeRobot 直接录                        | 路线 B：ALOHA2 hdf5 + 转换                                                                |
+| --------------------- | --------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| 录制脚本              | `aloha_ros_record.py` 或 `lerobot-record` | act-triple-plus-aloha2 的 `record_episodes_aloha2.py`                                   |
 | 产物                  | LeRobot v3.0 数据集                           | `episode_N.hdf5`，再用 act-triple 的 `convert_aloha_hdf5_to_lerobot_v30.py` 转成 v3.0 |
-| 夹爪状态              | 关节角归一化到 [0, 1]                         | ALOHA2 qpos 的归一化方式                                                    |
-| 额外特征              | 无                                            | `observation.velocity`、`observation.effort`                            |
-| `aloha_ros_eval.py` | `--data_format lerobot`（默认）             | `--data_format aloha2`                                                    |
-| `lerobot-rollout`   | 不加夹爪参数                                  | `--robot.gripper_state_format=aloha2`                                     |
-| 已有例子              | apple_grasping（ACT，30 Hz）                  | packaging_simple_2（pi05、MolmoAct2，50 Hz）                                |
+| 夹爪状态              | 关节角归一化到 [0, 1]                         | ALOHA2 qpos 的归一化方式                                                                  |
+| 额外特征              | 无                                            | `observation.velocity`、`observation.effort`                                          |
+| `aloha_ros_eval.py` | `--data_format lerobot`（默认）             | `--data_format aloha2`                                                                  |
+| `lerobot-rollout`   | 不加夹爪参数                                  | `--robot.gripper_state_format=aloha2`                                                   |
+| 已有例子              | apple_grasping（ACT，30 Hz）                  | packaging_simple_2（pi05、MolmoAct2，50 Hz）                                              |
 
 两条路线里动作（action）的夹爪含义相同，都是归一化的开合度（0 = 闭合，1 = 张开）。动作都是**绝对**的关节目标值，这也是 LeRobot 的默认做法，本文所有训练命令都按绝对动作写。
 
@@ -224,7 +224,17 @@ rsync -a --info=progress2 /home/robot/Dataset_and_Checkpoint/lerobot-dataset/pac
 
 以下命令在训练机的 lerobot 环境里运行，`--dataset.root` 换成训练机上的路径。
 
-### 8.1 ACT（路线 A 的例子）
+### 8.1 预训练权重怎么指定
+
+下面几个小节给出 ACT、pi0 / pi0.5、MolmoAct2、GR00T 的命令，其中本机训练、部署过的是 ACT、pi0.5、MolmoAct2。全部 23 种算法的默认配置和预训练权重写法见文末的附录。
+
+pi0 / pi0.5 写 `pretrained_path`、MolmoAct2 写 `checkpoint_path`，两者都是「从预训练权重开始」，区别在权重的存放格式：
+
+- **`--policy.pretrained_path`**：所有策略通用，指向 **LeRobot 格式**的 checkpoint（`config.json` + `model.safetensors`）。`lerobot/pi0_base`、`lerobot/pi05_base` 是 LeRobot 已经转成这种格式的官方 base 模型。和 `--policy.type` 一起用时，配置按你的命令和数据集新建（相机名、关节数从数据集读），只从这里加载权重。
+- **`--policy.checkpoint_path`**：MolmoAct2 自己的字段。MolmoAct2 没有 LeRobot 格式的 base 模型，这个字段指向 AllenAI 发布的原始 transformers 格式权重，每次构建模型时由模型自己读进来（部署时也一样，本机已经缓存了 `allenai/MolmoAct2`）。所以 MolmoAct2 训练时 `pretrained_path` 是空的：在 LeRobot 看来是新建的策略，预训练能力来自 `checkpoint_path`。ACT 的 ImageNet 骨干也属于这一类，由模型自己的字段加载。
+- **`--policy.path`**：配置和权重都从同一个 checkpoint 读，命令里只改训练参数。用于接着自己训练过的模型继续练（第 10 节）和部署。从官方 base 起步时，pi0 / pi0.5 的官方文档用的是 `--policy.type` + `--policy.pretrained_path`，配置按你的数据集新建，只借用权重；也有一些算法（smolvla、xvla 等）的官方文档直接写 `--policy.path=<base 模型>`，见附录。
+
+### 8.2 ACT（路线 A 的例子）
 
 ```bash
 lerobot-train \
@@ -234,7 +244,9 @@ lerobot-train \
   --steps=100000 --batch_size=8 --save_freq=10000 --wandb.enable=false
 ```
 
-### 8.2 pi0.5（路线 B）
+### 8.3 pi0 / pi0.5（路线 B）
+
+pi0.5：
 
 ```bash
 lerobot-train \
@@ -248,9 +260,11 @@ lerobot-train \
   --wandb.enable=false
 ```
 
+pi0：把 `--policy.type=pi05 --policy.pretrained_path=lerobot/pi05_base` 换成 `--policy.type=pi0 --policy.pretrained_path=lerobot/pi0_base`，`--output_dir`、`--job_name` 也换个名字，其余不变。
+
 batch 32 的全量微调需要大显存的卡，3090 这种 24 GB 的卡不够。
 
-### 8.3 MolmoAct2（路线 B）
+### 8.4 MolmoAct2（路线 B）
 
 ```bash
 lerobot-train \
@@ -264,9 +278,39 @@ lerobot-train \
   --output_dir=outputs/molmoact2_packaging --job_name=molmoact2_packaging --wandb.enable=false
 ```
 
-### 8.4 训练产物和续训
+`--policy.image_keys` 指定送进模型的相机。
+
+### 8.5 GR00T（路线 B）
+
+GR00T N1.7 是 NVIDIA 的 VLA。本机 venv 目前还没装它需要的包（decord、timm、diffusers），先在 2.2 节的 `uv sync` 里加上 `--extra groot`。
+
+```bash
+lerobot-train \
+  --dataset.repo_id=local/packaging_simple_2_v30 --dataset.root=/path/to/packaging_simple_2_v30 \
+  --dataset.image_transforms.enable=true \
+  --policy.type=groot --policy.base_model_path=nvidia/GR00T-N1.7-3B \
+  --policy.embodiment_tag=new_embodiment \
+  --policy.chunk_size=40 --policy.n_action_steps=40 \
+  --policy.use_bf16=true --policy.max_steps=20000 \
+  --policy.device=cuda --policy.push_to_hub=false \
+  --batch_size=64 --steps=20000 --save_freq=5000 \
+  --output_dir=outputs/groot_packaging --job_name=groot_packaging --wandb.enable=false
+```
+
+- `--policy.base_model_path`：NVIDIA 原始格式的 base 模型，和 MolmoAct2 的 `checkpoint_path` 是同一类（不是 LeRobot 格式，所以不用 `pretrained_path`）。每次构建模型都会先读它，部署时也一样，所以机器人电脑要能下载或已经缓存 `nvidia/GR00T-N1.7-3B`。
+- `--policy.embodiment_tag=new_embodiment`：GR00T 按 embodiment 区分动作头和归一化统计，自己的机器人用 `new_embodiment`，官方 SO-101 的例子也是这样写的。
+- 归一化由 GR00T 自己做（用数据集统计里的 q01/q99 做 min-max），不走 LeRobot 的归一化，所以第 7 节转换脚本算好的精确分位数可以直接用。
+- 默认只训练投影层、动作头（DiT）和 VLLN，LLM 和视觉编码器保持冻结（`--policy.tune_llm`、`--policy.tune_visual` 默认都是 false）。
+- `--policy.max_steps` 只用来计算 warmup 步数（5%），设成和 `--steps` 一样。
+- 动作块 40 是默认值，`new_embodiment` 下模型的动作 horizon 也是 40，50 Hz 下约 0.8 s。官方 SO-101（30 Hz）的例子用的是 16。
+- `--batch_size=64` 照官方例子写，显存不够就调小。
+- 部署和其他模型一样：`aloha_ros_eval.py --data_format aloha2`，或者 `lerobot-rollout` 加 `--robot.gripper_state_format=aloha2`。GR00T 必须给 `--task`。
+- 这条命令只确认过能被 `lerobot-train` 正确解析，本机还没有训练、部署过 GR00T。
+
+### 8.6 训练产物和续训
 
 - checkpoint 在 `<output_dir>/checkpoints/<步数>/pretrained_model/`（`last` 指向最新一个）。部署只需要 `pretrained_model` 这个目录，拷回机器人：
+
   ```bash
   rsync -a server:/path/outputs/pi05_xxx/checkpoints/020000/pretrained_model/ \
     /home/robot/Dataset_and_Checkpoint/checkpoints/pi05_xxx_020000/
@@ -274,6 +318,7 @@ lerobot-train \
 
   打包成 `.tar.gz` 传输的，解压前先 `gzip -t xxx.tar.gz` 确认文件完整（下载中断的包能列出部分文件，但解压会报 `Unexpected EOF`）。
 - 中断后续训：
+
   ```bash
   lerobot-train --config_path=outputs/<job>/checkpoints/last/pretrained_model/train_config.json --resume=true
   ```
@@ -343,7 +388,7 @@ lerobot-rollout --strategy.type=base \
 
 **选配**：不开 RTC 也能正常运行（9.1、9.2 都是同步推理）。只有 pi05 这类推理慢的模型、又在意 chunk 之间的停顿时才需要。
 
-论文：Kevin Black, Manuel Y. Galliker, Sergey Levine. *Real-Time Execution of Action Chunking Flow Policies*, 2025. <https://arxiv.org/abs/2506.07339>（Physical Intelligence 的介绍页：<https://www.physicalintelligence.company/research/real_time_chunking>）
+论文：Kevin Black, Manuel Y. Galliker, Sergey Levine. *Real-Time Execution of Action Chunking Flow Policies*, 2025. [https://arxiv.org/abs/2506.07339](https://arxiv.org/abs/2506.07339)（Physical Intelligence 的介绍页：[https://www.physicalintelligence.company/research/real_time_chunking](https://www.physicalintelligence.company/research/real_time_chunking)）
 
 RTC 在后台提前算下一个 chunk，并让新 chunk 的开头贴合旧轨迹，执行中不停顿。只能用 `lerobot-rollout`。下面是带快捷键、录数据的 episodic 版本：
 
@@ -375,14 +420,14 @@ lerobot-rollout --strategy.type=episodic \
 
 策略自动跑，出错时人用主臂接管纠正，把纠正的片段加进训练数据再训练。有两种方式，**两种都能用，也可以混在一起用**：
 
-| | 方式 A：`lerobot-rollout` dagger | 方式 B：act-triple 的 `hil_rollout.py` |
-|---|---|---|
-| 被改进的模型 | LeRobot 训练的 checkpoint（pi05、MolmoAct2、ACT），在本机 GPU 上推理 | openpi 或 N0-VTLA 的模型，在服务器上用 `serve_policy.py` 推理 |
-| 运行环境 | 本仓库的 venv | act-triple 的 conda 环境 `aloha` |
-| 录什么 | 只录纠正段，每次纠正存成一条 episode | 整条 episode 都录，每帧带 phase / intervention 标签，录完再切 |
-| 数据格式 | LeRobot v3.0 数据集（`rollout_*`） | ALOHA2 原始 hdf5（N0 是 VTLA 目录） |
-| 能用来训练 | 只能用于 LeRobot | LeRobot、ACT（act-triple）、openpi 都能用 |
-| 并进 LeRobot 训练集 | `merge_hil_into_lerobot_v30.py`（10.1） | `hil_split_episodes.py` 切出纠正段，再用 `convert_aloha_hdf5_to_lerobot_v30.py` 和示教一起转（10.2） |
+|                     | 方式 A：`lerobot-rollout` dagger                                   | 方式 B：act-triple 的 `hil_rollout.py`                                                                 |
+| ------------------- | -------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| 被改进的模型        | LeRobot 训练的 checkpoint（pi05、MolmoAct2、ACT），在本机 GPU 上推理 | openpi 或 N0-VTLA 的模型，在服务器上用 `serve_policy.py` 推理                                          |
+| 运行环境            | 本仓库的 venv                                                        | act-triple 的 conda 环境 `aloha`                                                                       |
+| 录什么              | 只录纠正段，每次纠正存成一条 episode                                 | 整条 episode 都录，每帧带 phase / intervention 标签，录完再切                                            |
+| 数据格式            | LeRobot v3.0 数据集（`rollout_*`）                                 | ALOHA2 原始 hdf5（N0 是 VTLA 目录）                                                                      |
+| 能用来训练          | 只能用于 LeRobot                                                     | LeRobot、ACT（act-triple）、openpi 都能用                                                                |
+| 并进 LeRobot 训练集 | `merge_hil_into_lerobot_v30.py`（10.1）                            | `hil_split_episodes.py` 切出纠正段，再用 `convert_aloha_hdf5_to_lerobot_v30.py` 和示教一起转（10.2） |
 
 怎么选：要改进的是 LeRobot 训练的模型，用方式 A；要改进的是 openpi / N0 的模型，用方式 B。DAgger 的纠正针对的是当时跑的那个模型的失败，用来训练同一个模型效果最直接；拿去训练别的模型也算有效的示教数据，但纠正的不是那个模型自己的失败。方式 B 的数据是原始格式，以后给哪个框架用都行；方式 A 的数据只能用于 LeRobot，没有工具把它转回 hdf5。
 
@@ -394,13 +439,13 @@ lerobot-rollout --strategy.type=episodic \
 
 接管有两个版本，区别只在「开始纠正」那一刻主臂和从臂怎么交接：
 
-| | 版本一：修改前（非离合，从臂缓入） | 版本二：修改后（离合式） |
-|---|---|---|
-| 主臂释放 | 0.6 s 内变软后断扭矩 | 0.3 s 内变软后断扭矩，再等主臂稳定（最多 1 s） |
-| 从臂怎么跟 | 0.3 s 内从保持的姿态缓入到主臂的**绝对**位置 | 记下主臂和从臂的差值，按「主臂 − 差值」跟随 |
-| 主臂松手下沉时 | 从臂跟着沉到主臂的位置，会动一下 | 差值把下沉抵消掉，从臂不动 |
-| 不录的开头 | 0.5 s | 0.2 s |
-| 关键参数 | `correction_blend_s=0.3`、`correction_skip_s=0.5`、`release_ramp_s=0.6` | `relative_on_release=true`、`correction_blend_s=0`、`correction_skip_s=0.2`、`release_ramp_s=0.3` |
+|                | 版本一：修改前（非离合，从臂缓入）                                            | 版本二：修改后（离合式）                                                                                  |
+| -------------- | ----------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| 主臂释放       | 0.6 s 内变软后断扭矩                                                          | 0.3 s 内变软后断扭矩，再等主臂稳定（最多 1 s）                                                            |
+| 从臂怎么跟     | 0.3 s 内从保持的姿态缓入到主臂的**绝对**位置                            | 记下主臂和从臂的差值，按「主臂 − 差值」跟随                                                              |
+| 主臂松手下沉时 | 从臂跟着沉到主臂的位置，会动一下                                              | 差值把下沉抵消掉，从臂不动                                                                                |
+| 不录的开头     | 0.5 s                                                                         | 0.2 s                                                                                                     |
+| 关键参数       | `correction_blend_s=0.3`、`correction_skip_s=0.5`、`release_ramp_s=0.6` | `relative_on_release=true`、`correction_blend_s=0`、`correction_skip_s=0.2`、`release_ramp_s=0.3` |
 
 两个版本录出来的数据格式完全一样，可以录进同一个数据集；想对比两种接管的效果，就用不同的 `--dataset.root`。接着录已有的 HIL 数据集时加 `--resume=true`。
 
@@ -448,14 +493,14 @@ lerobot-rollout --strategy.type=dagger --strategy.record_autonomous=false \
 4. 纠正完按 **← 结束纠正**：这一段存成一条 episode。
 5. 按 **→ 交还策略**，继续自动运行。ESC 结束整个会话。
 
-| 参数 | 作用 |
-|---|---|
-| `--teleop.relative_on_release` | `true` = 离合式（版本二）：主臂释放、等它稳定下来后，记下主臂和从臂的差值，从臂按「主臂 − 差值」跟随。不加（默认 `false`）= 版本一，从臂直接跟主臂的绝对位置 |
-| `--teleop.release_ramp_s` | 主臂在这段时间内把位置增益降到 0 再断扭矩，避免一下子松掉 |
-| `--strategy.correction_blend_s` | 开始纠正时从臂缓入到主臂位置的时间。版本一靠它避免从臂一下跳过去；离合模式下从臂本来就不动，设 0 |
-| `--strategy.correction_skip_s` | 每次纠正的开头这么多秒不录，避开交接时的过渡动作。纠正时间短于它的不保存、不计数 |
-| `--strategy.release_teleop_on_resume=false` | 交还策略后主臂保持锁定，不会因为断扭矩而掉下来 |
-| `--strategy.num_episodes` | 录满这么多次纠正后自动结束 |
+| 参数                                          | 作用                                                                                                                                                              |
+| --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--teleop.relative_on_release`              | `true` = 离合式（版本二）：主臂释放、等它稳定下来后，记下主臂和从臂的差值，从臂按「主臂 − 差值」跟随。不加（默认 `false`）= 版本一，从臂直接跟主臂的绝对位置 |
+| `--teleop.release_ramp_s`                   | 主臂在这段时间内把位置增益降到 0 再断扭矩，避免一下子松掉                                                                                                         |
+| `--strategy.correction_blend_s`             | 开始纠正时从臂缓入到主臂位置的时间。版本一靠它避免从臂一下跳过去；离合模式下从臂本来就不动，设 0                                                                  |
+| `--strategy.correction_skip_s`              | 每次纠正的开头这么多秒不录，避开交接时的过渡动作。纠正时间短于它的不保存、不计数                                                                                  |
+| `--strategy.release_teleop_on_resume=false` | 交还策略后主臂保持锁定，不会因为断扭矩而掉下来                                                                                                                    |
+| `--strategy.num_episodes`                   | 录满这么多次纠正后自动结束                                                                                                                                        |
 
 #### 录完之后：数据处理和训练
 
@@ -484,6 +529,7 @@ python aloha_scripts/merge_hil_into_lerobot_v30.py \
 
 - 从头训：把第 8 节命令里的数据集换成合并后的数据集。
 - 接着旧模型练：
+
   ```bash
   lerobot-train --policy.path=$CKPT \
     --dataset.repo_id=local/packaging_simple_2_v30_hil --dataset.root=/path/to/packaging_simple_2_v30_hil \
@@ -491,6 +537,7 @@ python aloha_scripts/merge_hil_into_lerobot_v30.py \
     --batch_size=32 --steps=5000 --save_freq=1000 \
     --output_dir=outputs/pi05_packaging_hil --job_name=pi05_packaging_hil --wandb.enable=false
   ```
+
   `--policy.path` 从旧模型的权重开始，归一化统计自动换成新数据集的。这里不要用 `--resume=true`，它只能在原来那次训练、原来的数据集上续训。旧模型的输入里有 velocity/effort，新数据集里没有，照样能训，已经用 ACT 实测过这个流程。
 
 ### 10.2 方式 B：act-triple 的 `hil_rollout.py`（openpi / N0 模型）
@@ -584,8 +631,52 @@ python examples/aloha_ros/aloha_scripts/sleep_modify.py --shut_down_puppet  # �
 | `Couldn't parse '' into an int`                    | `$FPS`、`$CAMS` 等变量在当前终端是空的，按 2.4 重新设置                               |
 | `No module named 'rospkg'`                         | `uv sync` 删掉了 ROS 依赖，重新执行 `uv pip install rospkg catkin_pkg netifaces h5py` |
 | 夹爪动作异常（该张不张、该合不合）                   | 数据路线和部署参数不一致，见第 0 节；或者标定变了                                         |
-| 同步推理每秒顿一下                                   | 正常：每个 chunk 执行完要等一次推理。要连续运动可选用 RTC                                    |
+| 同步推理每秒顿一下                                   | 正常：每个 chunk 执行完要等一次推理。要连续运动可选用 RTC                                 |
 | RTC 周期性跳动                                       | `execution_horizon` 太小，见 9.3                                                        |
 | `--resume=true` 接着录失败                         | 相机或 fps 和已有数据集不一致，`CAMS` 要写全数据集里的相机                              |
 | `.tar.gz` 解压报 `Unexpected EOF`                | 下载不完整，重新下载，先 `gzip -t` 校验                                                 |
 | 启动时 `Please set the gripper's 'operating mode'` | Interbotix 的提示，可以忽略                                                               |
+
+---
+
+## 附录：LeRobot 各算法配置对照
+
+`src/lerobot/policies/` 下注册了 23 种算法，都用 `lerobot-train --policy.type=<名字>` 选择。下表的默认值直接从各算法的配置代码里读出（`lerobot` 0.7.x），预训练权重的写法来自 `docs/source/` 里各算法的官方文档。预训练权重的三种指定方式见 8.1。
+
+| 算法               | 类别                                  | 预训练权重怎么指定                                                                                                                                       | 默认动作块 / 每次执行步数  | 默认归一化（state、action） | 默认学习率 | 需要的 extra       | 本机情况                  |
+| ------------------ | ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------- | --------------------------- | ---------- | ------------------ | ------------------------- |
+| `act`            | 模仿学习（Transformer + CVAE）        | 不加载整套预训练策略；ResNet18 骨干默认用 ImageNet 权重（`--policy.pretrained_backbone_weights`）                                                      | 100 / 100                  | MEAN_STD                    | 1e-5       | 无                 | apple 任务训练、部署过    |
+| `diffusion`      | 模仿学习（扩散策略）                  | 同 ACT，ResNet18 骨干用 ImageNet 权重                                                                                                                    | 64 / 32                    | MIN_MAX                     | 1e-4       | `diffusion`      | 未验证                    |
+| `dm05`           | VLA（Dexmal DM0.5）                   | `--policy.path=lerobot/dm05_base`                                                                                                                      | 50 / 50                    | QUANTILES                   | 2.5e-5     | `dm05`           | 未验证                    |
+| `eo1`            | VLA（Qwen2.5-VL 骨干）                | `--policy.path=lerobot/eo1-base`                                                                                                                       | 16 / 16                    | MEAN_STD                    | 1e-4       | `eo1`            | 未验证                    |
+| `evo1`           | VLA（InternVL3 骨干 + flow matching） | `--policy.type=evo1`；VLM 骨干由 `--policy.vlm_model_name` 加载（默认 `OpenGVLab/InternVL3-1B-hf`）                                                | 50 / 50                    | MIN_MAX                     | 1e-5       | `evo1`           | 未验证                    |
+| `fastwam`        | 世界动作模型（Wan2.2 视频模型）       | `--policy.type=fastwam`；base 由 `--policy.base_model_id` 加载（默认 `lerobot/fastwam_base`）                                                      | 32 / 32                    | MEAN_STD                    | 1e-4       | `fastwam`        | 未验证                    |
+| `fineart_vla`    | VLA（在 pi0.5 上加语言头）            | `--policy.path=lerobot/fineart_vla_base`                                                                                                               | 50 / 50                    | QUANTILES                   | 2.5e-5     | `fineart_vla`    | 未验证                    |
+| `flux3`          | 视频 latent + 动作的扩散 Transformer  | 从官方 checkpoint 起步：`--policy.path=black-forest-labs/flux-3-action-droid`（或 `-so101`）                                                         | 32 / 32                    | IDENTITY                    | 1e-4       | `flux3`          | 未验证                    |
+| `gaussian_actor` | 强化学习（HIL-SERL 的 SAC actor）     | 不用于普通的模仿学习训练，见 `docs/source/hilserl.mdx`                                                                                                 | —                         | MIN_MAX                     | —         | —                 | 未验证                    |
+| `groot`          | VLA（NVIDIA GR00T）                   | `--policy.type=groot --policy.base_model_path=nvidia/GR00T-N1.7-3B`（这也是默认值）                                                                    | 40 / 40                    | IDENTITY                    | 1e-4       | `groot`          | 只确认过命令能解析（8.5） |
+| `lawam`          | 隐空间世界动作模型（Qwen3-VL 骨干）   | `--policy.path=jialei02/lawam-pretrain-lerobot`                                                                                                        | 50 / 8                     | MIN_MAX                     | 1e-4       | `lawam`          | 未验证                    |
+| `lingbot_va`     | 自回归视频-动作世界模型（Wan2.2）     | `--policy.type=lingbot_va`；base 由 `--policy.wan_pretrained_path` 加载（默认 `robbyant/lingbot-va-base`）                                         | 16 / 16                    | IDENTITY                    | 1e-5       | `lingbot_va`     | 未验证                    |
+| `molmoact2`      | VLA（AllenAI）                        | `--policy.checkpoint_path=allenai/MolmoAct2`（这也是默认值）                                                                                           | 30 / 30                    | QUANTILES                   | 1e-5       | `molmoact2`      | packaging 训练、部署过    |
+| `multi_task_dit` | 多任务扩散 Transformer                | 不加载整套预训练策略；视觉、文本编码器用 CLIP（`--policy.vision_encoder_name`、`--policy.text_encoder_name`，默认 `openai/clip-vit-base-patch16`） | 32 / 24                    | MIN_MAX                     | 2e-5       | `multi_task_dit` | 未验证                    |
+| `pi0`            | VLA（Physical Intelligence）          | `--policy.pretrained_path=lerobot/pi0_base`                                                                                                            | 50 / 50                    | MEAN_STD                    | 2.5e-5     | `pi`             | 只确认过命令能解析        |
+| `pi0_fast`       | VLA（pi0 的 FAST 动作 token 版）      | `--policy.pretrained_path=lerobot/pi0fast-base`                                                                                                        | 50 / 50                    | MEAN_STD                    | 2.5e-5     | `pi`             | 未验证                    |
+| `pi05`           | VLA（Physical Intelligence）          | `--policy.pretrained_path=lerobot/pi05_base`                                                                                                           | 50 / 50                    | QUANTILES                   | 2.5e-5     | `pi`             | packaging 训练、部署过    |
+| `smolvla`        | 小型 VLA（SmolVLM2 骨干）             | `--policy.path=lerobot/smolvla_base`                                                                                                                   | 50 / 50                    | MEAN_STD                    | 1e-4       | `smolvla`        | 未验证                    |
+| `tdmpc`          | 强化学习（TD-MPC，基于模型）          | 没有预训练权重，主要用于仿真里的在线强化学习                                                                                                             | 5 / 1                      | 动作 MIN_MAX                | 3e-4       | 无                 | 未验证                    |
+| `vla_jepa`       | VLA + V-JEPA2 视频世界模型            | `--policy.path=lerobot/VLA-JEPA-Pretrain`；换机器人时配合 `--policy.reinit_modules` 重新初始化动作编码等模块                                         | 7 / 7                      | MEAN_STD、MIN_MAX           | 1e-4       | `vla_jepa`       | 未验证                    |
+| `vqbet`          | 模仿学习（VQ-BeT）                    | 同 ACT，ResNet18 骨干用 ImageNet 权重                                                                                                                    | 5（`action_chunk_size`） | MIN_MAX                     | 1e-4       | 无                 | 未验证                    |
+| `wall_x`         | VLA（WALL-OSS）                       | `--policy.type=wall_x --policy.pretrained_name_or_path=x-square-robot/wall-oss-flow`（这也是默认值）                                                   | 32 / 32                    | MEAN_STD                    | 2e-5       | `wallx`          | 未验证                    |
+| `xvla`           | VLA（soft prompt）                    | `--policy.path=lerobot/xvla-base`                                                                                                                      | 32 / 32                    | IDENTITY                    | 1e-4       | `xvla`           | 未验证                    |
+
+- 「预训练权重怎么指定」一栏写的是各算法官方文档的做法。写 `--policy.path` 的算法，配置也来自那个 checkpoint；如果它的相机名、关节数和你的数据集不同，要按各自文档用 `--rename_map` 等参数对齐。这一点在本机没有验证过。
+- 需要的 extra 要在 2.2 节的 `uv sync` 里加上，比如 `--extra smolvla`。
+- 换算法时，部署端的数据格式规则不变：路线 B 的数据训练出来的模型，`aloha_ros_eval.py` 用 `--data_format aloha2`，`lerobot-rollout` 加 `--robot.gripper_state_format=aloha2`。
+
+`policies/` 下还有 4 个目录不是可训练的算法：
+
+| 目录              | 是什么                                                                                                                                 |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `common`        | 各算法共用的代码（flow matching、VLA 工具函数）                                                                                        |
+| `rtc`           | 推理时的实时分块（RTC）模块，供 pi0、pi0.5 等使用，见 9.3                                                                              |
+| `sac`、`sarm` | 只剩 `__pycache__` 的旧目录。代码已经移到 `lerobot/rl/algorithms/sac` 和 `lerobot/rewards/sarm`，这两个目录不在 git 里，可以删掉 |
