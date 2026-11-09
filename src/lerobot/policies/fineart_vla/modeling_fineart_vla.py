@@ -217,7 +217,8 @@ class FineARTVLAPytorch(PI05Pytorch):  # see openpi `PI0Pytorch`
             use_cache=False,
             adarms_cond=[None, adarms_cond],
         )
-        past_key_values.crop(prefix_len)
+        for layer in past_key_values.layers:
+            layer.crop(prefix_len - layer.get_seq_length())
 
         suffix_out = outputs_embeds[1]
         suffix_out = suffix_out[:, -self.config.chunk_size :]
@@ -1595,16 +1596,25 @@ class FineARTVLAPolicy(PI05Policy):
 
     @torch.no_grad()
     def predict_action_chunk(
-        self, batch: dict[str, Tensor], **kwargs: Unpack[RTCActionSelectKwargs]
+        self,
+        batch: dict[str, Tensor],
+        *,
+        noise: Tensor | None = None,
+        **kwargs: Unpack[RTCActionSelectKwargs],
     ) -> Tensor:
         marks = batch.get(OBS_LANGUAGE_CAUSAL_MARKS)
         if marks is None:
-            return super().predict_action_chunk(batch, **kwargs)
-        return self._predict_action_chunk_with_marks(batch, marks, **kwargs)
+            return super().predict_action_chunk(batch, noise=noise, **kwargs)
+        return self._predict_action_chunk_with_marks(batch, marks, noise=noise, **kwargs)
 
     @torch.no_grad()
     def _predict_action_chunk_with_marks(
-        self, batch: dict[str, Tensor], marks: Tensor, **kwargs: Unpack[RTCActionSelectKwargs]
+        self,
+        batch: dict[str, Tensor],
+        marks: Tensor,
+        *,
+        noise: Tensor | None = None,
+        **kwargs: Unpack[RTCActionSelectKwargs],
     ) -> Tensor:
         """Base ``predict_action_chunk`` plus causal marks on the generated-subtask span."""
         self.eval()
@@ -1612,7 +1622,7 @@ class FineARTVLAPolicy(PI05Policy):
         tokens = batch[OBS_LANGUAGE_TOKENS]
         masks = batch[OBS_LANGUAGE_ATTENTION_MASK]
         actions = self.model.sample_actions(
-            images, img_masks, tokens, masks, lang_causal_marks=marks, **kwargs
+            images, img_masks, tokens, masks, lang_causal_marks=marks, noise=noise, **kwargs
         )
         if self.config.output_features is None:
             raise ValueError("output_features must be configured before computing actions")
