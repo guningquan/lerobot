@@ -2,6 +2,9 @@
 
 This directory contains the ROS-based implementation of ALOHA (A Low-cost Open-source Hardware System for Bimanual Teleoperation) using lerobot framework.
 
+中文完整流程（环境配置、采集、转换、训练、部署、HIL）见 [README_CN.md](./README_CN.md)。
+日本語の全手順ガイドは [README_JA.md](./README_JA.md) を参照してください。
+
 ## Architecture
 
 The implementation follows a layered architecture:

@@ -50,6 +50,7 @@ from pathlib import Path
 from typing import Any
 import cv2
 import numpy as np
+from tqdm import tqdm
 
 from lerobot.cameras.ros_image import RosImageCameraConfig
 from lerobot.configs.policies import PreTrainedConfig
@@ -57,7 +58,7 @@ from lerobot.utils.feature_utils import hw_to_dataset_features
 from lerobot.policies.factory import get_policy_class, make_pre_post_processors
 from lerobot.policies.pretrained import PreTrainedPolicy
 from lerobot.policies.utils import make_robot_action
-from lerobot.processor import make_default_processors
+from lerobot.processor import bind_relative_anchor, make_default_processors
 from lerobot.processor.pipeline import RobotProcessorPipeline
 from lerobot.robots.aloha_ros import AlohaRos, AlohaRosConfig
 from lerobot.utils.constants import ACTION, OBS_STATE, OBS_STR
@@ -177,18 +178,21 @@ def check_policy_matches_data_format(
     if data_format == "aloha2":
         provided = {OBS_STATE, f"{OBS_STR}.velocity", f"{OBS_STR}.effort"}
         provided |= {f"{OBS_STR}.images.{cam}" for cam in robot.cameras}
-        expected_names = {ACTION: OPENPI_ALOHA_FEATURE_LABELS, OBS_STATE: OPENPI_ALOHA_FEATURE_LABELS}
+        # Both label sets describe the same left-first data: openpi's converter (wrong labels) and
+        # act-triple-plus-aloha2's convert_aloha_hdf5_to_lerobot_v30.py (the aloha_ros names)
+        accepted = [OPENPI_ALOHA_FEATURE_LABELS, ALOHA2_ACTION_KEYS]
+        expected_names = {ACTION: accepted, OBS_STATE: accepted}
     else:
         provided = set(hw_to_dataset_features(robot.observation_features, OBS_STR))
         expected_names = {
-            ACTION: hw_to_dataset_features(robot.action_features, ACTION)[ACTION]["names"],
-            OBS_STATE: hw_to_dataset_features(robot.observation_features, OBS_STR)[OBS_STATE]["names"],
+            ACTION: [hw_to_dataset_features(robot.action_features, ACTION)[ACTION]["names"]],
+            OBS_STATE: [hw_to_dataset_features(robot.observation_features, OBS_STR)[OBS_STATE]["names"]],
         }
     hint = (
-        " If the policy was trained on a dataset converted from ALOHA2 HDF5 episodes (openpi's "
-        "convert_aloha_data_to_lerobot, with observation.velocity / observation.effort), run with "
-        "--data_format aloha2; if it was trained on data recorded with aloha_ros_record.py, use "
-        "--data_format lerobot."
+        " If the policy was trained on a dataset converted from ALOHA2 HDF5 episodes "
+        "(act-triple-plus-aloha2's convert_aloha_hdf5_to_lerobot_v30.py or openpi's convert_aloha_data_to_lerobot, with "
+        "observation.velocity / observation.effort), run with --data_format aloha2; if it was trained "
+        "on data recorded with aloha_ros_record.py, use --data_format lerobot."
     )
 
     missing = sorted(set(policy_cfg.input_features) - provided)
@@ -197,12 +201,12 @@ def check_policy_matches_data_format(
 
     # Policies that store their training feature names (e.g. MolmoAct2) let the joint order be checked
     trained_names = getattr(policy_cfg, "dataset_feature_names", None) or {}
-    for key, expected in expected_names.items():
+    for key, accepted in expected_names.items():
         names = trained_names.get(key)
-        if names and list(names) != list(expected):
+        if names and all(list(names) != list(expected) for expected in accepted):
             raise ValueError(
                 f"The policy was trained with {key} = {list(names)}, but --data_format {data_format} "
-                f"provides {list(expected)}.{hint}"
+                f"provides {list(accepted[-1])}.{hint}"
             )
 
     if task is None and policy_cfg.type in ("molmoact2", "pi0", "pi05", "smolvla", "xvla", "groot"):
@@ -264,6 +268,12 @@ def eval_loop(
 
     timestamp = 0
     start_episode_t = time.perf_counter()
+    # One progress line (episode seconds, last model inference) instead of per-tick prints
+    progress = tqdm(
+        total=round(control_time_s, 1), unit="s", dynamic_ncols=True, leave=True,
+        bar_format="{l_bar}{bar}| {n:.1f}/{total:.1f} s [{elapsed}{postfix}]",
+    )
+    last_inference_ms = None
 
     while timestamp < control_time_s:
         start_loop_t = time.perf_counter()
@@ -295,8 +305,8 @@ def eval_loop(
             robot_type=robot.robot_type,
         )
         inference_s = time.perf_counter() - inference_start
-        if inference_s > 1.0 / fps:
-            print(f"Policy inference took {inference_s * 1e3:.0f} ms (one control tick is {1e3 / fps:.0f} ms)")
+        if inference_s > 1.0 / fps:  # the model ran (a chunking policy otherwise pops its queue)
+            last_inference_ms = inference_s * 1e3
 
         # Convert to robot action format
         if data_format == "aloha2":
@@ -309,8 +319,6 @@ def eval_loop(
         # Process action through robot action processor
         act_final = robot_action_processor((act_processed, obs_processed))
 
-
-        print(f"Action: {act_final}")
         # "*_gripper.pos" is the normalised gripper opening (0 = closed, 1 = open); AlohaRos maps it
         # to each puppet's own gripper range, so no per-script gripper mapping is needed here.
         # input("Press Enter to continue...")
@@ -351,6 +359,11 @@ def eval_loop(
         precise_sleep(sleep_time)
 
         timestamp = time.perf_counter() - start_episode_t
+        if last_inference_ms is not None:
+            progress.set_postfix_str(f"infer {last_inference_ms:.0f} ms", refresh=False)
+        progress.update(min(timestamp, control_time_s) - progress.n)  # redraws at most every 0.1 s
+
+    progress.close()
 
 
 def main():
@@ -448,6 +461,11 @@ def main():
             "device_processor": {"device": policy.config.device},
         },
     )
+    # Relative-action checkpoints (use_relative_actions): every action of a chunk is relative to the
+    # state the chunk was predicted from, so hold that anchor until the queue drains (as lerobot-eval
+    # and lerobot-rollout do) instead of re-anchoring on each tick's state.
+    if bind_relative_anchor(policy, preprocessor) is not None:
+        print("Relative actions enabled: chunk anchor held until the action queue drains")
 
     # Optional dataset of the evaluated episodes
     dataset = None
