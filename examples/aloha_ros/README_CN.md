@@ -414,6 +414,83 @@ lerobot-rollout --strategy.type=episodic \
 - `queue_threshold=30`：队列剩 30 步时开始算下一个 chunk，算完约执行掉 15 步，切换点落在 15–30 步的过渡区里。GPU 同时跑别的程序、延迟变大时，两个值一起调到 35。
 - 训练时没开 RTC 的 checkpoint（`rtc_training_max_delay=0`，目前的模型都是）只能用默认的 guided 模式。
 
+### 9.4 服务器推理 + act-triple 控制机器人（选配）
+
+模型放在 GPU 服务器上，机器人电脑只负责相机和电机，用的是 act-triple-plus-aloha2 那套机器人脚本（`run_pi_policy.py` 纯评估、`hil_rollout.py` 离合式 HIL，Python 3.8 的 `aloha` 环境）。`examples/aloha_ros/serve_policy_websocket.py` 用 openpi `serve_policy.py` 的 websocket + msgpack 协议提供 LeRobot 模型，act-triple 加 `--policy lerobot` 就能连，和连 openpi、N0 的方式一样。机器人电脑不用装 lerobot，也不用 GPU。
+
+只适用于路线 B 的模型（用 ALOHA2 hdf5 转换的数据训练的 pi0.5、MolmoAct2、ACT、GR00T 等）：服务器按 `--data_format aloha2` 的格式组装观测，返回的是 hdf5 `/action` 格式的绝对动作，相对动作的模型在服务器上还原。
+
+**服务器端**（lerobot 环境，要额外装 `websockets`、`msgpack`）：
+
+```bash
+uv pip install websockets msgpack           # 不在 uv.lock 里，uv sync 之后要重装
+python examples/aloha_ros/serve_policy_websocket.py \
+  --policy_path $CKPT --task "$TASK" --port 8000
+```
+
+启动时会先做一次预热推理，看到 `Serving ... on ws://0.0.0.0:8000` 就可以连了。`--task` 是客户端没发 prompt 时用的默认任务；`--n_action_steps` 可以改每次返回的动作数（默认用 checkpoint 的）；`--device` 默认 `cuda`。
+
+**机器人端**（act-triple，`conda activate aloha`）：
+
+```bash
+cd /mnt/server_ssd2/Programs_server/act-triple-plus-aloha2
+python3 aloha_scripts/run_pi_policy.py --policy lerobot --host 10.240.77.20 --port 8000          # 纯评估
+python3 aloha_scripts/hil_rollout.py --task_name packaging_simple_2 --policy lerobot \
+  --host 10.240.77.20 --port 8000 --num_episodes 20                                              # HIL，录 hdf5
+```
+
+- 发送的观测：qpos、qvel、effort，加上 checkpoint 用到的相机（服务器连接时告诉客户端），原始分辨率、JPEG 质量 90（和录制时一样），每次约 150 kB。
+- 执行方式和 openpi 一样是同步的：每执行完一个动作块（`--action_horizon`，默认 50，不超过模型返回的步数）推理一次，期间机器人停一下。
+- 按键、HIL 流程、录下的 hdf5 格式都和 openpi 相同，见 act-triple 的 `aloha_scripts/README_run_robot.md`。
+- 一个服务器同时只服务一个客户端，每次有新客户端连上时重置模型状态。
+
+**例：GR00T 模型 `picking_w_cover`**（GR00T N1.7，4 路相机含 `cam_low`，动作块 40，绝对动作）
+
+服务器端（第一次要先装 GR00T 的依赖；启动时会读 base 模型 `nvidia/GR00T-N1.7-3B`，第一次要下载几分钟）：
+
+```bash
+ssh server
+conda activate lerobot
+pip install "dm-tree>=0.1.8,<1.0.0" "timm>=1.0.0,<1.1.0" "decord>=0.6.0,<1.0.0" "diffusers>=0.38.0,<0.40.0"   # 只需一次
+cd /mnt/ssd2/guningquan/Programs_server/lerobot
+CUDA_VISIBLE_DEVICES=2 python examples/aloha_ros/serve_policy_websocket.py \
+  --policy_path /mnt/ssd2/guningquan/Programs_server/lerobot/outputs/picking_w_cover \
+  --task "picking ichigo to the cup" --port 8000
+```
+
+看到 `Serving groot on ws://0.0.0.0:8000` 就可以连了。机器人端（act-triple）：
+
+```bash
+conda activate aloha
+cd /mnt/server_ssd2/Programs_server/act-triple-plus-aloha2
+
+# 纯评估，对应 aloha_ros_eval.py：180 s × 50 Hz = 9000 tick
+python3 aloha_scripts/run_pi_policy.py --policy lerobot --host 10.240.77.20 --port 8000 \
+  --num_episodes 5 --max_episode_steps 9000 --action_horizon 40
+
+# HIL：录 hdf5 到 picking_w_cover_hil/
+python3 aloha_scripts/hil_rollout.py --task_name picking_w_cover --policy lerobot \
+  --host 10.240.77.20 --port 8000 --num_episodes 20 --action_horizon 40
+```
+
+- `--policy_path` 指向的目录本身就是 `pretrained_model`（里面直接是 `config.json`、`model.safetensors`）。
+- 任务写在服务器的 `--task` 里，机器人端不用给 `--prompt`；相机（包括 `cam_low`）由服务器告诉机器人端，act-triple 的 `RealEnv` 本来就订阅了这 4 路。
+- GR00T 每次返回 40 步；`--action_horizon 20` 表示每执行 20 步就重新推理，反应更快，但停顿次数翻倍。
+- HIL 每条的时长默认取 `picking_w_cover` 的 `episode_len`（4000 tick = 80 s），用 `--max_timesteps` 修改。
+- 这条路是同步执行，没有 RTC；要 RTC 的连续动作，还是用 9.3 的 `lerobot-rollout` 在本机跑。
+
+本机 3090 上的实测（用 packaging 录像帧当观测，经过真实的 websocket 往返）：
+
+| 模型                                                              | 每个动作块的往返时间 | 预测和录像动作的平均误差（关节） |
+| ----------------------------------------------------------------- | -------------------- | -------------------------------- |
+| `pi05_packaging_simple_2_default`                               | 约 230 ms            | 0.003–0.011 rad                 |
+| `pi05_packaging_simple_2_aligned`（相对动作）                   | 约 235 ms            | 0.002–0.009 rad                 |
+| `molmoact2_packaging_020000`（在它自己的 `packaging` 数据上） | 约 335 ms            | 0.005–0.007 rad                 |
+
+对照：把图像换成别的时刻的，pi0.5 的误差会涨到约 0.05 rad，说明图像和 state 都正确地送进了模型。
+
+跨机器实测：服务器（10.240.77.20，conda 环境 `lerobot`，RTX A6000）跑 MolmoAct2，机器人电脑经局域网连接，每个动作块往返约 320 ms，误差和本机测试一致。
+
 ---
 
 ## 10. HIL 人工接管补数据（DAgger）

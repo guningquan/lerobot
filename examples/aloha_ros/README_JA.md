@@ -414,6 +414,83 @@ lerobot-rollout --strategy.type=episodic \
 - `queue_threshold=30`：キューの残りが 30 ステップになったら次の chunk の計算を始めます。計算が終わる頃には約 15 ステップ実行済みなので、切り替わり点は 15〜30 ステップの遷移区間に入ります。GPU で他のプログラムも動いていて遅延が大きくなる場合は、両方を 35 に上げてください。
 - 学習時に RTC を有効にしていない checkpoint（`rtc_training_max_delay=0`、現在のモデルはすべてこれ）は、デフォルトの guided モードしか使えません。
 
+### 9.4 サーバーで推論 + act-triple でロボットを制御（オプション）
+
+モデルは GPU サーバーに置き、ロボット PC はカメラとモーターだけを担当します。ロボット側は act-triple-plus-aloha2 のスクリプト（`run_pi_policy.py` で評価のみ、`hil_rollout.py` でクラッチ式 HIL、Python 3.8 の `aloha` 環境）を使います。`examples/aloha_ros/serve_policy_websocket.py` は openpi の `serve_policy.py` と同じ websocket + msgpack プロトコルで LeRobot のモデルを提供するので、act-triple 側は `--policy lerobot` を付けるだけで、openpi や N0 と同じように接続できます。ロボット PC には lerobot も GPU も不要です。
+
+使えるのはルート B のモデル（ALOHA2 hdf5 から変換したデータで学習した pi0.5、MolmoAct2、ACT、GR00T など）だけです。サーバーは `--data_format aloha2` と同じ形式で観測を組み立て、hdf5 の `/action` 形式の絶対アクションを返します。相対アクションのモデルはサーバー側で絶対値に戻します。
+
+**サーバー側**（lerobot の環境。`websockets`、`msgpack` を追加でインストール）：
+
+```bash
+uv pip install websockets msgpack           # uv.lock に含まれないので、uv sync の後は入れ直す
+python examples/aloha_ros/serve_policy_websocket.py \
+  --policy_path $CKPT --task "$TASK" --port 8000
+```
+
+起動時にウォームアップの推論を 1 回行い、`Serving ... on ws://0.0.0.0:8000` と表示されたら接続できます。`--task` はクライアントが prompt を送らないときに使うデフォルトのタスク、`--n_action_steps` で 1 回に返すアクション数を変更（デフォルトは checkpoint の値）、`--device` のデフォルトは `cuda` です。
+
+**ロボット側**（act-triple、`conda activate aloha`）：
+
+```bash
+cd /mnt/server_ssd2/Programs_server/act-triple-plus-aloha2
+python3 aloha_scripts/run_pi_policy.py --policy lerobot --host 10.240.77.20 --port 8000          # 評価のみ
+python3 aloha_scripts/hil_rollout.py --task_name packaging_simple_2 --policy lerobot \
+  --host 10.240.77.20 --port 8000 --num_episodes 20                                              # HIL、hdf5 で記録
+```
+
+- 送る観測：qpos、qvel、effort と、checkpoint が使うカメラ（接続時にサーバーから通知）を元の解像度で JPEG 品質 90（収録時と同じ）にしたもので、1 回あたり約 150 kB。
+- 実行方式は openpi と同じ同期型です：アクションチャンク（`--action_horizon`、デフォルト 50、モデルが返すステップ数が上限）を実行し終えるたびに推論し、その間ロボットは一瞬止まります。
+- キー操作、HIL の流れ、記録される hdf5 の形式は openpi と同じです。act-triple の `aloha_scripts/README_run_robot_ja.md` を参照してください。
+- 1 つのサーバーが同時に受け付けるクライアントは 1 つだけで、新しいクライアントが接続するたびにモデルの状態をリセットします。
+
+**例：GR00T モデル `picking_w_cover`**（GR00T N1.7、`cam_low` を含む 4 台のカメラ、アクションチャンク 40、絶対アクション）
+
+サーバー側（初回は GR00T の依存パッケージを先にインストール。起動時に base モデル `nvidia/GR00T-N1.7-3B` を読み込むので、初回はダウンロードに数分かかります）：
+
+```bash
+ssh server
+conda activate lerobot
+pip install "dm-tree>=0.1.8,<1.0.0" "timm>=1.0.0,<1.1.0" "decord>=0.6.0,<1.0.0" "diffusers>=0.38.0,<0.40.0"   # 初回のみ
+cd /mnt/ssd2/guningquan/Programs_server/lerobot
+CUDA_VISIBLE_DEVICES=2 python examples/aloha_ros/serve_policy_websocket.py \
+  --policy_path /mnt/ssd2/guningquan/Programs_server/lerobot/outputs/picking_w_cover \
+  --task "picking ichigo to the cup" --port 8000
+```
+
+`Serving groot on ws://0.0.0.0:8000` と表示されたら接続できます。ロボット側（act-triple）：
+
+```bash
+conda activate aloha
+cd /mnt/server_ssd2/Programs_server/act-triple-plus-aloha2
+
+# 評価のみ、aloha_ros_eval.py に相当：180 秒 × 50 Hz = 9000 tick
+python3 aloha_scripts/run_pi_policy.py --policy lerobot --host 10.240.77.20 --port 8000 \
+  --num_episodes 5 --max_episode_steps 9000 --action_horizon 40
+
+# HIL：hdf5 を picking_w_cover_hil/ に記録
+python3 aloha_scripts/hil_rollout.py --task_name picking_w_cover --policy lerobot \
+  --host 10.240.77.20 --port 8000 --num_episodes 20 --action_horizon 40
+```
+
+- `--policy_path` が指すディレクトリ自体が `pretrained_model` です（直下に `config.json`、`model.safetensors`）。
+- タスクはサーバーの `--task` に書くので、ロボット側で `--prompt` は不要です。カメラ（`cam_low` を含む）はサーバーからロボット側に通知され、act-triple の `RealEnv` はもともとこの 4 台を購読しています。
+- GR00T は 1 回に 40 ステップを返します。`--action_horizon 20` にすると 20 ステップごとに推論し直すので反応は速くなりますが、停止の回数は倍になります。
+- HIL の 1 エピソードの長さはデフォルトで `picking_w_cover` の `episode_len`（4000 tick = 80 秒）で、`--max_timesteps` で変更できます。
+- この方法は同期実行で RTC はありません。RTC の連続した動きが必要なら、9.3 の `lerobot-rollout` をこのマシンで使ってください。
+
+このマシンの 3090 での実測（packaging の録画フレームを観測として、実際の websocket で往復）：
+
+| モデル | アクションチャンクごとの往復時間 | 予測と録画のアクションの平均誤差（関節） |
+| --- | --- | --- |
+| `pi05_packaging_simple_2_default` | 約 230 ms | 0.003〜0.011 rad |
+| `pi05_packaging_simple_2_aligned`（相対アクション） | 約 235 ms | 0.002〜0.009 rad |
+| `molmoact2_packaging_020000`（自身の `packaging` データで） | 約 335 ms | 0.005〜0.007 rad |
+
+対照として、画像を別の時刻のものに替えると pi0.5 の誤差は約 0.05 rad まで増えます。画像と state の両方が正しくモデルに入っていることを示しています。
+
+マシンをまたいだ実測：サーバー（10.240.77.20、conda 環境 `lerobot`、RTX A6000）で MolmoAct2 を動かし、ロボット PC から LAN 経由で接続すると、アクションチャンクごとの往復は約 320 ms で、誤差はこのマシンでのテストと同じでした。
+
 ---
 
 ## 10. HIL：人の介入による追加データ収集（DAgger）
@@ -529,6 +606,7 @@ python aloha_scripts/merge_hil_into_lerobot_v30.py \
 
 - 最初から学習：8 章のコマンドのデータセットを結合後のものに置き換えます。
 - 既存のモデルから続けて学習：
+
   ```bash
   lerobot-train --policy.path=$CKPT \
     --dataset.repo_id=local/packaging_simple_2_v30_hil --dataset.root=/path/to/packaging_simple_2_v30_hil \
